@@ -6,6 +6,7 @@ from station_scout.app import (
     lastfm_track_key,
     playback_window_title,
     should_scrobble_lastfm,
+    spotify_playlist_tracks,
 )
 from station_scout.storage import AppState
 from station_scout.tracklog import TrackEntry
@@ -58,3 +59,14 @@ def test_lastfm_scrobbling_respects_user_preference() -> None:
     entry = TrackEntry("Artist", "Song", "Artist - Song", dt.datetime.now())
 
     assert not should_scrobble_lastfm(state, entry, set())
+
+
+def test_spotify_playlist_tracks_filters_uncertain_and_duplicates() -> None:
+    now = dt.datetime.now()
+    entries = [
+        TrackEntry("Artist", "Song", "Artist - Song", now),
+        TrackEntry("Artist", "Song", "Artist - Song", now),
+        TrackEntry("", "", "Station ID", now, uncertain=True),
+    ]
+
+    assert spotify_playlist_tracks(entries) == [("Artist", "Song")]

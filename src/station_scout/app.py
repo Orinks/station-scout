@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import http.server
 import threading
+import time
 import webbrowser
 from collections.abc import Callable
+from urllib.parse import parse_qs, urlparse, urlunparse
 
 import requests
 import wx
@@ -18,8 +21,8 @@ from station_scout.player import RadioPlayer
 from station_scout.radio_browser import RadioBrowserClient, RadioBrowserError
 from station_scout.schedule import due_timers
 from station_scout.storage import AppState, SettingsStore, add_unique_station
-from station_scout.spotify import SpotifyClient, build_spotify_auth_request
-from station_scout.tracklog import IcyMetadataReader, TrackSessionLog, parse_stream_title
+from station_scout.spotify import SpotifyClient, SpotifyPlaylistResult, build_spotify_auth_request
+from station_scout.tracklog import IcyMetadataReader, TrackEntry, TrackSessionLog, parse_stream_title
 
 
 APP_TITLE = "Station Scout"
@@ -65,6 +68,20 @@ def should_scrobble_lastfm(state: AppState, entry, sent_tracks: set[str]) -> boo
     return lastfm_track_key(entry) not in sent_tracks
 
 
+def spotify_playlist_tracks(entries: list[TrackEntry]) -> list[tuple[str, str]]:
+    tracks: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if entry.uncertain or not entry.artist or not entry.title:
+            continue
+        key = lastfm_track_key(entry)
+        if key in seen:
+            continue
+        seen.add(key)
+        tracks.append((entry.artist, entry.title))
+    return tracks
+
+
 class StationScoutFrame(wx.Frame):
     def __init__(self) -> None:
         super().__init__(None, title=APP_TITLE, size=(980, 680))
@@ -80,6 +97,9 @@ class StationScoutFrame(wx.Frame):
         self.metadata_stop_event = threading.Event()
         self.track_stop_at = ""
         self.track_reader = IcyMetadataReader()
+        self.spotify_callback_server: http.server.ThreadingHTTPServer | None = None
+        self.spotify_auth_redirect_uri = ""
+        self.settings_dialog: SettingsDialog | None = None
         self.lastfm_client = self._create_lastfm_client()
         self.lastfm_cache = LastFmScrobbleCache(self.store.path.parent / "lastfm-scrobble-cache.jsonl")
         self.player = RadioPlayer(
@@ -361,9 +381,11 @@ class StationScoutFrame(wx.Frame):
 
     def _on_settings(self, _event: wx.Event) -> None:
         dialog = SettingsDialog(self)
+        self.settings_dialog = dialog
         try:
             dialog.ShowModal()
         finally:
+            self.settings_dialog = None
             dialog.Destroy()
 
     def play_station(self, station: Station) -> None:
@@ -563,6 +585,7 @@ class StationScoutFrame(wx.Frame):
     def _on_close(self, event: wx.CloseEvent) -> None:
         self.store.save(self.state)
         self.timer.Stop()
+        self._stop_spotify_callback_server()
         self.tray.RemoveIcon()
         self.tray.Destroy()
         event.Skip()
@@ -642,11 +665,25 @@ class StationScoutFrame(wx.Frame):
             self.play_station(station)
 
     def stop_tracking(self) -> None:
-        if self.track_session:
-            self._set_status(f"Tracking saved to {self.track_session.path}")
-            self._notify("Playlist tracking stopped", self.track_session.show_name or self.track_session.station.name)
+        session = self.track_session
+        if session:
+            self._set_status(f"Tracking saved to {session.path}")
+            self._notify("Playlist tracking stopped", session.show_name or session.station.name)
         self.track_session = None
         self.track_stop_at = ""
+        if session and self.state.spotify_enabled and spotify_playlist_tracks(session.entries):
+            prompt = wx.MessageDialog(
+                self,
+                "Create a private Spotify playlist from this tracking session?",
+                "Create Spotify playlist",
+                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION,
+            )
+            try:
+                create_playlist = prompt.ShowModal() == wx.ID_YES
+            finally:
+                prompt.Destroy()
+            if create_playlist:
+                self._create_spotify_playlist_from_session(session)
 
     def _on_choose_log_folder(self, _event: wx.Event) -> None:
         dialog = wx.DirDialog(
@@ -734,22 +771,27 @@ class StationScoutFrame(wx.Frame):
         if not config:
             self._set_status("Station Scout is missing its Spotify client ID.")
             return
+        redirect_uri = self._start_spotify_callback_server(config.redirect_uri)
+        if not redirect_uri:
+            return
         auth_request = build_spotify_auth_request(
             client_id=config.client_id,
-            redirect_uri=config.redirect_uri,
+            redirect_uri=redirect_uri,
         )
+        self.spotify_auth_redirect_uri = redirect_uri
         self.state.spotify_auth_state = auth_request.state
         self.state.spotify_code_verifier = auth_request.code_verifier
         self.store.save(self.state)
         webbrowser.open(auth_request.url)
-        self._set_status("Approve Station Scout in Spotify. Callback handling comes next.")
+        self._set_status("Approve Station Scout in Spotify. This window will finish automatically.")
 
     def _finish_spotify_with_code(self, code: str, state: str) -> None:
         config = spotify_app_config()
         if not config or state != self.state.spotify_auth_state:
             self._set_status("Spotify authorization state did not match.")
             return
-        client = SpotifyClient(client_id=config.client_id, redirect_uri=config.redirect_uri)
+        redirect_uri = self.spotify_auth_redirect_uri or config.redirect_uri
+        client = SpotifyClient(client_id=config.client_id, redirect_uri=redirect_uri)
         token_set = client.exchange_code(code=code, code_verifier=self.state.spotify_code_verifier)
         self.state.spotify_access_token = token_set.access_token
         self.state.spotify_refresh_token = token_set.refresh_token
@@ -757,8 +799,72 @@ class StationScoutFrame(wx.Frame):
         self.state.spotify_enabled = True
         self.state.spotify_auth_state = ""
         self.state.spotify_code_verifier = ""
+        self.spotify_auth_redirect_uri = ""
         self.store.save(self.state)
         self._set_status("Connected Spotify.")
+        self._refresh_settings_dialog()
+
+    def _refresh_settings_dialog(self) -> None:
+        if self.settings_dialog:
+            self.settings_dialog.refresh()
+
+    def _start_spotify_callback_server(self, redirect_uri: str) -> str:
+        self._stop_spotify_callback_server()
+        parsed = urlparse(redirect_uri)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 0
+        path = parsed.path or "/"
+        frame = self
+
+        class SpotifyCallbackHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                request = urlparse(self.path)
+                if request.path != path:
+                    self.send_error(404)
+                    return
+                query = parse_qs(request.query)
+                code = query.get("code", [""])[0]
+                state = query.get("state", [""])[0]
+                error = query.get("error", [""])[0]
+                if error:
+                    wx.CallAfter(frame._set_status, f"Spotify authorization failed: {error}")
+                    wx.CallAfter(frame._stop_spotify_callback_server)
+                    self._respond("Spotify authorization failed. You can close this tab.")
+                    return
+                if not code or not state:
+                    self.send_error(400)
+                    return
+                wx.CallAfter(frame._finish_spotify_with_code, code, state)
+                wx.CallAfter(frame._stop_spotify_callback_server)
+                self._respond("Station Scout is connected to Spotify. You can close this tab.")
+
+            def log_message(self, _format: str, *_args: object) -> None:
+                return
+
+            def _respond(self, body: str) -> None:
+                payload = body.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        try:
+            self.spotify_callback_server = http.server.ThreadingHTTPServer((host, port), SpotifyCallbackHandler)
+        except OSError as exc:
+            self._show_error(exc)
+            return ""
+        threading.Thread(target=self.spotify_callback_server.serve_forever, daemon=True).start()
+        actual_port = int(self.spotify_callback_server.server_address[1])
+        return urlunparse((parsed.scheme or "http", f"{host}:{actual_port}", path, "", "", ""))
+
+    def _stop_spotify_callback_server(self) -> None:
+        if not self.spotify_callback_server:
+            return
+        self.spotify_callback_server.shutdown()
+        self.spotify_callback_server.server_close()
+        self.spotify_callback_server = None
+        self.spotify_auth_redirect_uri = ""
 
     def _send_lastfm(self, entry) -> None:
         if not self.lastfm_client:
@@ -768,6 +874,46 @@ class StationScoutFrame(wx.Frame):
             self.lastfm_client.scrobble(entry)
         except (LastFmError, requests.RequestException):
             self.lastfm_cache.append(entry)
+
+    def _create_spotify_playlist_from_session(self, session: TrackSessionLog) -> None:
+        config = spotify_app_config()
+        tracks = spotify_playlist_tracks(session.entries)
+        if not config or not self.state.spotify_enabled or not self.state.spotify_access_token:
+            return
+        if not tracks:
+            self._set_status("No Spotify-ready artist/title tracks were tracked.")
+            return
+        name = session.show_name or f"{session.station.name} {session.started_at:%Y-%m-%d}"
+        client = SpotifyClient(client_id=config.client_id, redirect_uri=config.redirect_uri)
+
+        def work() -> SpotifyPlaylistResult:
+            if self.state.spotify_refresh_token and self.state.spotify_token_expires_at <= int(time.time()) + 60:
+                token_set = client.refresh_access_token(refresh_token=self.state.spotify_refresh_token)
+                self.state.spotify_access_token = token_set.access_token
+                self.state.spotify_refresh_token = token_set.refresh_token
+                self.state.spotify_token_expires_at = token_set.expires_at
+                self.store.save(self.state)
+            return client.create_playlist_from_tracks(
+                access_token=self.state.spotify_access_token,
+                name=name,
+                tracks=tracks,
+                public=False,
+            )
+
+        def on_success(result: object) -> None:
+            playlist = result if isinstance(result, SpotifyPlaylistResult) else None
+            if not playlist:
+                return
+            detail = f"{playlist.matched_tracks} songs"
+            if playlist.skipped_tracks:
+                detail += f", {playlist.skipped_tracks} not found"
+            if playlist.url:
+                self._set_status(f"Created Spotify playlist: {playlist.name} ({detail}) {playlist.url}")
+            else:
+                self._set_status(f"Created Spotify playlist: {playlist.name} ({detail})")
+
+        self._set_status("Creating Spotify playlist...")
+        self._run_background(work, on_success, self._show_error)
 
     def _show_error(self, exc: BaseException) -> None:
         self.search_button.Enable()
@@ -939,6 +1085,9 @@ class SettingsDialog(wx.Dialog):
 
     def _on_connect_spotify(self, _event: wx.Event) -> None:
         self.parent_frame._on_connect_spotify(_event)
+        self.refresh()
+
+    def refresh(self) -> None:
         self._refresh()
 
     def _on_char_hook(self, event: wx.KeyEvent) -> None:

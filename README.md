@@ -35,9 +35,14 @@ Last.fm in the browser; they do not provide API keys. Station Scout's app-level 
 come from build/runtime configuration. Radio/DJ-selected tracks are sent with `chosenByUser=0`, and
 uncertain metadata is not scrobbled.
 
-Spotify support follows the browser authorization model too. The foundation uses Authorization Code
+Spotify support follows the browser authorization model too. Station Scout fetches the public
+Spotify client ID from the Station Scout integration proxy by default, then uses Authorization Code
 with PKCE so users authorize their Spotify account in the browser while Station Scout stores user
-tokens for future playlist export.
+tokens for future playlist export. The Spotify app should register the loopback redirect as
+`http://127.0.0.1/spotify/callback`; Station Scout chooses an available local port when the user
+connects. Development builds can override the public app config with
+`STATION_SCOUT_SPOTIFY_CLIENT_ID`, `STATION_SCOUT_SPOTIFY_REDIRECT_URI`, or
+`STATION_SCOUT_SPOTIFY_CONFIG_URL`.
 
 ## Notifications
 

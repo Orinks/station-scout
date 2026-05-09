@@ -13,9 +13,16 @@ class AppState:
     recents: list[Station] = field(default_factory=list)
     timers: list[TuneTimer] = field(default_factory=list)
     track_log_folder: str = ""
-    lastfm_api_key: str = ""
-    lastfm_api_secret: str = ""
+    lastfm_enabled: bool = False
+    lastfm_username: str = ""
     lastfm_session_key: str = ""
+    lastfm_pending_token: str = ""
+    spotify_enabled: bool = False
+    spotify_access_token: str = ""
+    spotify_refresh_token: str = ""
+    spotify_token_expires_at: int = 0
+    spotify_auth_state: str = ""
+    spotify_code_verifier: str = ""
 
 
 class SettingsStore:
@@ -35,9 +42,16 @@ class SettingsStore:
             recents=_stations(payload.get("recents")),
             timers=_timers(payload.get("timers")),
             track_log_folder=str(payload.get("track_log_folder") or ""),
-            lastfm_api_key=str(payload.get("lastfm_api_key") or ""),
-            lastfm_api_secret=str(payload.get("lastfm_api_secret") or ""),
+            lastfm_enabled=bool(payload.get("lastfm_enabled", False)),
+            lastfm_username=str(payload.get("lastfm_username") or ""),
             lastfm_session_key=str(payload.get("lastfm_session_key") or ""),
+            lastfm_pending_token=str(payload.get("lastfm_pending_token") or ""),
+            spotify_enabled=bool(payload.get("spotify_enabled", False)),
+            spotify_access_token=str(payload.get("spotify_access_token") or ""),
+            spotify_refresh_token=str(payload.get("spotify_refresh_token") or ""),
+            spotify_token_expires_at=int(payload.get("spotify_token_expires_at") or 0),
+            spotify_auth_state=str(payload.get("spotify_auth_state") or ""),
+            spotify_code_verifier=str(payload.get("spotify_code_verifier") or ""),
         )
 
     def save(self, state: AppState) -> None:
@@ -47,9 +61,16 @@ class SettingsStore:
             "recents": [station.to_json() for station in state.recents],
             "timers": [timer.to_json() for timer in state.timers],
             "track_log_folder": state.track_log_folder,
-            "lastfm_api_key": state.lastfm_api_key,
-            "lastfm_api_secret": state.lastfm_api_secret,
+            "lastfm_enabled": state.lastfm_enabled,
+            "lastfm_username": state.lastfm_username,
             "lastfm_session_key": state.lastfm_session_key,
+            "lastfm_pending_token": state.lastfm_pending_token,
+            "spotify_enabled": state.spotify_enabled,
+            "spotify_access_token": state.spotify_access_token,
+            "spotify_refresh_token": state.spotify_refresh_token,
+            "spotify_token_expires_at": state.spotify_token_expires_at,
+            "spotify_auth_state": state.spotify_auth_state,
+            "spotify_code_verifier": state.spotify_code_verifier,
         }
         self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

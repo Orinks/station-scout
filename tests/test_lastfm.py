@@ -26,6 +26,25 @@ def test_scrobble_uses_chosen_by_user_false_for_radio_tracks() -> None:
     assert fake.posts[0]["track"] == "Song"
 
 
+def test_lastfm_browser_auth_flow_gets_token_and_session() -> None:
+    client = LastFmClient(api_key="key", api_secret="secret", session_key="")
+    fake = FakeSession(
+        [
+            "<lfm status='ok'><token>abc</token></lfm>",
+            "<lfm status='ok'><session><name>listener</name><key>session</key></session></lfm>",
+        ]
+    )
+    client.session = fake  # type: ignore[assignment]
+
+    token = client.request_token()
+    session_key, username = client.create_session(token)
+
+    assert token == "abc"
+    assert client.auth_url(token) == "https://www.last.fm/api/auth/?api_key=key&token=abc"
+    assert session_key == "session"
+    assert username == "listener"
+
+
 def test_scrobble_skips_uncertain_metadata() -> None:
     client = LastFmClient(api_key="key", api_secret="secret", session_key="session")
     fake = FakeSession("<lfm status='ok'></lfm>")
@@ -53,13 +72,13 @@ def test_scrobble_cache_skips_uncertain_entries(tmp_path) -> None:
 
 
 class FakeSession:
-    def __init__(self, response_text: str) -> None:
-        self.response_text = response_text
+    def __init__(self, response_text: str | list[str]) -> None:
+        self.responses = [response_text] if isinstance(response_text, str) else response_text
         self.posts: list[dict[str, str]] = []
 
     def post(self, url: str, *, data: dict[str, str], timeout: float):
         self.posts.append(data)
-        return FakeResponse(self.response_text)
+        return FakeResponse(self.responses.pop(0))
 
 
 class FakeResponse:

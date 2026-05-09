@@ -35,6 +35,43 @@ class LastFmClient:
         self.timeout = timeout
         self.session = requests.Session()
 
+    def request_token(self) -> str:
+        payload = {"method": "auth.getToken", "api_key": self.api_key}
+        payload["api_sig"] = sign_lastfm_request(payload, self.api_secret)
+        response = self.session.post(self.api_root, data=payload, timeout=self.timeout)
+        response.raise_for_status()
+        root = ElementTree.fromstring(response.text)
+        if root.attrib.get("status") != "ok":
+            _raise_for_lfm_failure(response.text)
+        token = root.findtext("token", "")
+        if not token:
+            raise LastFmError("Last.fm did not return an auth token")
+        return token
+
+    def auth_url(self, token: str) -> str:
+        return f"https://www.last.fm/api/auth/?api_key={self.api_key}&token={token}"
+
+    def create_session(self, token: str) -> tuple[str, str]:
+        payload = {
+            "method": "auth.getSession",
+            "api_key": self.api_key,
+            "token": token,
+        }
+        payload["api_sig"] = sign_lastfm_request(payload, self.api_secret)
+        response = self.session.post(self.api_root, data=payload, timeout=self.timeout)
+        response.raise_for_status()
+        root = ElementTree.fromstring(response.text)
+        if root.attrib.get("status") != "ok":
+            _raise_for_lfm_failure(response.text)
+        session = root.find("session")
+        if session is None:
+            raise LastFmError("Last.fm did not return a session")
+        session_key = session.findtext("key", "")
+        username = session.findtext("name", "")
+        if not session_key:
+            raise LastFmError("Last.fm did not return a session key")
+        return session_key, username
+
     def update_now_playing(self, entry: TrackEntry) -> None:
         if entry.uncertain or not entry.artist or not entry.title:
             return

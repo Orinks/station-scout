@@ -11,9 +11,13 @@ def test_store_round_trips_state(tmp_path: Path) -> None:
         recents=[station],
         timers=[TuneTimer("abc", "Example", "18:00")],
         track_log_folder=str(tmp_path / "logs"),
-        lastfm_api_key="key",
-        lastfm_api_secret="secret",
+        lastfm_enabled=True,
+        lastfm_username="listener",
         lastfm_session_key="session",
+        spotify_enabled=True,
+        spotify_access_token="access",
+        spotify_refresh_token="refresh",
+        spotify_token_expires_at=123,
     )
     store = SettingsStore(tmp_path / "settings.json")
 
@@ -24,7 +28,11 @@ def test_store_round_trips_state(tmp_path: Path) -> None:
     assert loaded.recents == [station]
     assert loaded.timers == [TuneTimer("abc", "Example", "18:00")]
     assert loaded.track_log_folder == str(tmp_path / "logs")
+    assert loaded.lastfm_enabled
+    assert loaded.lastfm_username == "listener"
     assert loaded.lastfm_session_key == "session"
+    assert loaded.spotify_enabled
+    assert loaded.spotify_refresh_token == "refresh"
 
 
 def test_add_unique_station_moves_existing_to_front() -> None:

@@ -11,12 +11,14 @@ import wx.adv
 import wx.media
 
 from station_scout.direct_streams import station_from_direct_url, streamurl_search_url
+from station_scout.integrations_config import lastfm_app_config, spotify_app_config
 from station_scout.lastfm import LastFmClient, LastFmError, LastFmScrobbleCache
 from station_scout.models import Station, TuneTimer
 from station_scout.notifications import create_notifier
 from station_scout.radio_browser import RadioBrowserClient, RadioBrowserError
 from station_scout.schedule import due_timers
 from station_scout.storage import SettingsStore, add_unique_station
+from station_scout.spotify import SpotifyClient, build_spotify_auth_request
 from station_scout.tracklog import IcyMetadataReader, TrackSessionLog, parse_stream_title
 
 
@@ -98,6 +100,9 @@ class StationScoutFrame(wx.Frame):
         self.start_tracking_button = wx.Button(panel, label="Start tracking")
         self.stop_tracking_button = wx.Button(panel, label="Stop tracking")
         self.log_folder_button = wx.Button(panel, label="Choose log folder")
+        self.connect_lastfm_button = wx.Button(panel, label="Connect Last.fm")
+        self.finish_lastfm_button = wx.Button(panel, label="Finish Last.fm")
+        self.connect_spotify_button = wx.Button(panel, label="Connect Spotify")
         for button in (
             self.search_button,
             self.open_direct_search_button,
@@ -109,6 +114,9 @@ class StationScoutFrame(wx.Frame):
             self.start_tracking_button,
             self.stop_tracking_button,
             self.log_folder_button,
+            self.connect_lastfm_button,
+            self.finish_lastfm_button,
+            self.connect_spotify_button,
         ):
             buttons.Add(button, 0, wx.RIGHT, 8)
         search_box.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
@@ -158,6 +166,9 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self._on_start_tracking, self.start_tracking_button)
         self.Bind(wx.EVT_BUTTON, lambda _event: self.stop_tracking(), self.stop_tracking_button)
         self.Bind(wx.EVT_BUTTON, self._on_choose_log_folder, self.log_folder_button)
+        self.Bind(wx.EVT_BUTTON, self._on_connect_lastfm, self.connect_lastfm_button)
+        self.Bind(wx.EVT_BUTTON, self._on_finish_lastfm, self.finish_lastfm_button)
+        self.Bind(wx.EVT_BUTTON, self._on_connect_spotify, self.connect_spotify_button)
         self.Bind(wx.EVT_CHOICE, self._on_search_source_changed, self.search_source)
         self.station_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play_selected)
         self.favorites_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("favorites"))
@@ -455,17 +466,80 @@ class StationScoutFrame(wx.Frame):
             dialog.Destroy()
 
     def _create_lastfm_client(self) -> LastFmClient | None:
-        if not (
-            self.state.lastfm_api_key
-            and self.state.lastfm_api_secret
-            and self.state.lastfm_session_key
-        ):
+        config = lastfm_app_config()
+        if not config or not self.state.lastfm_session_key or not self.state.lastfm_enabled:
             return None
         return LastFmClient(
-            api_key=self.state.lastfm_api_key,
-            api_secret=self.state.lastfm_api_secret,
+            api_key=config.api_key,
+            api_secret=config.api_secret,
             session_key=self.state.lastfm_session_key,
         )
+
+    def _on_connect_lastfm(self, _event: wx.Event) -> None:
+        config = lastfm_app_config()
+        if not config:
+            self._set_status("Station Scout is missing its Last.fm app credentials.")
+            return
+        client = LastFmClient(api_key=config.api_key, api_secret=config.api_secret, session_key="")
+        try:
+            token = client.request_token()
+        except (LastFmError, requests.RequestException) as exc:
+            self._show_error(exc)
+            return
+        self.state.lastfm_pending_token = token
+        self.store.save(self.state)
+        webbrowser.open(client.auth_url(token))
+        self._set_status("Approve Station Scout in Last.fm, then choose Finish Last.fm.")
+
+    def _on_finish_lastfm(self, _event: wx.Event) -> None:
+        config = lastfm_app_config()
+        if not config or not self.state.lastfm_pending_token:
+            self._set_status("Start Last.fm connection first.")
+            return
+        client = LastFmClient(api_key=config.api_key, api_secret=config.api_secret, session_key="")
+        try:
+            session_key, username = client.create_session(self.state.lastfm_pending_token)
+        except (LastFmError, requests.RequestException) as exc:
+            self._show_error(exc)
+            return
+        self.state.lastfm_session_key = session_key
+        self.state.lastfm_username = username
+        self.state.lastfm_enabled = True
+        self.state.lastfm_pending_token = ""
+        self.store.save(self.state)
+        self.lastfm_client = self._create_lastfm_client()
+        self._set_status(f"Connected Last.fm as {username or 'your account'}.")
+
+    def _on_connect_spotify(self, _event: wx.Event) -> None:
+        config = spotify_app_config()
+        if not config:
+            self._set_status("Station Scout is missing its Spotify client ID.")
+            return
+        auth_request = build_spotify_auth_request(
+            client_id=config.client_id,
+            redirect_uri=config.redirect_uri,
+        )
+        self.state.spotify_auth_state = auth_request.state
+        self.state.spotify_code_verifier = auth_request.code_verifier
+        self.store.save(self.state)
+        webbrowser.open(auth_request.url)
+        self._set_status("Approve Station Scout in Spotify. Callback handling comes next.")
+
+    def _finish_spotify_with_code(self, code: str, state: str) -> None:
+        config = spotify_app_config()
+        if not config or state != self.state.spotify_auth_state:
+            self._set_status("Spotify authorization state did not match.")
+            return
+        client = SpotifyClient(client_id=config.client_id, redirect_uri=config.redirect_uri)
+        token_set = client.exchange_code(code=code, code_verifier=self.state.spotify_code_verifier)
+        self.state.spotify_access_token = token_set.access_token
+        self.state.spotify_refresh_token = token_set.refresh_token
+        self.state.spotify_token_expires_at = token_set.expires_at
+        self.state.spotify_enabled = True
+        self.state.spotify_auth_state = ""
+        self.state.spotify_code_verifier = ""
+        self.store.save(self.state)
+        self._set_status("Connected Spotify.")
 
     def _send_lastfm(self, entry) -> None:
         if not self.lastfm_client:

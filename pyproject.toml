@@ -9,7 +9,7 @@ description = "Accessible desktop internet radio explorer using Radio Browser."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "PySide6>=6.7",
+    "wxPython>=4.2",
     "requests>=2.32",
 ]
 
@@ -29,3 +29,5 @@ where = ["src"]
 line-length = 100
 target-version = "py311"
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]

@@ -5,7 +5,7 @@ Station Scout is a desktop internet radio explorer built around the public Radio
 V1 focuses on:
 
 - Searching working stations by name, country, language, and tag
-- Playing streams with Qt Multimedia
+- Playing streams with wxPython media controls
 - Favorite stations and recent station history
 - System tray controls for play, stop, show, and quit
 - Desktop notifications
@@ -25,4 +25,3 @@ python -m venv .venv
 .\.venv\Scripts\python -m pytest
 .\.venv\Scripts\python -m ruff check .
 ```
-

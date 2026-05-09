@@ -3,8 +3,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+.env
+.env*.local
 build/
 dist/
 *.egg-info/
 station_scout.json
-

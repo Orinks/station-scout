@@ -11,7 +11,7 @@ import wx.adv
 
 from station_scout.direct_streams import station_from_direct_url, streamurl_search_url
 from station_scout.integrations_config import lastfm_app_config, spotify_app_config
-from station_scout.lastfm import LastFmClient, LastFmError, LastFmScrobbleCache
+from station_scout.lastfm import LastFmClient, LastFmError, LastFmProxyClient, LastFmScrobbleCache
 from station_scout.models import Station, TuneTimer
 from station_scout.notifications import create_notifier
 from station_scout.player import RadioPlayer
@@ -635,6 +635,11 @@ class StationScoutFrame(wx.Frame):
         config = lastfm_app_config()
         if not config or not self.state.lastfm_session_key or not self.state.lastfm_enabled:
             return None
+        if config.proxy_url:
+            return LastFmProxyClient(
+                proxy_url=config.proxy_url,
+                session_key=self.state.lastfm_session_key,
+            )
         return LastFmClient(
             api_key=config.api_key,
             api_secret=config.api_secret,
@@ -646,6 +651,19 @@ class StationScoutFrame(wx.Frame):
         if not config:
             self._set_status("Station Scout is missing its Last.fm app credentials.")
             return
+        if config.proxy_url:
+            client = LastFmProxyClient(proxy_url=config.proxy_url)
+            try:
+                token, auth_url = client.request_token()
+            except (LastFmError, requests.RequestException) as exc:
+                self._show_error(exc)
+                return
+            self.state.lastfm_pending_token = token
+            self.store.save(self.state)
+            webbrowser.open(auth_url)
+            self._set_status("Approve Station Scout in Last.fm, then choose Finish Last.fm.")
+            return
+
         client = LastFmClient(api_key=config.api_key, api_secret=config.api_secret, session_key="")
         try:
             token = client.request_token()
@@ -662,7 +680,10 @@ class StationScoutFrame(wx.Frame):
         if not config or not self.state.lastfm_pending_token:
             self._set_status("Start Last.fm connection first.")
             return
-        client = LastFmClient(api_key=config.api_key, api_secret=config.api_secret, session_key="")
+        if config.proxy_url:
+            client = LastFmProxyClient(proxy_url=config.proxy_url)
+        else:
+            client = LastFmClient(api_key=config.api_key, api_secret=config.api_secret, session_key="")
         try:
             session_key, username = client.create_session(self.state.lastfm_pending_token)
         except (LastFmError, requests.RequestException) as exc:

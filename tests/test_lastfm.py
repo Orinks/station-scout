@@ -2,7 +2,13 @@ import datetime as dt
 
 import pytest
 
-from station_scout.lastfm import LastFmClient, LastFmError, LastFmScrobbleCache, sign_lastfm_request
+from station_scout.lastfm import (
+    LastFmClient,
+    LastFmError,
+    LastFmProxyClient,
+    LastFmScrobbleCache,
+    sign_lastfm_request,
+)
 from station_scout.tracklog import TrackEntry
 
 
@@ -43,6 +49,45 @@ def test_lastfm_browser_auth_flow_gets_token_and_session() -> None:
     assert client.auth_url(token) == "https://www.last.fm/api/auth/?api_key=key&token=abc"
     assert session_key == "session"
     assert username == "listener"
+
+
+def test_lastfm_proxy_flow_gets_token_and_session() -> None:
+    client = LastFmProxyClient(proxy_url="https://example.test/api/lastfm")
+    fake = FakeJsonSession(
+        [
+            {"token": "abc", "authUrl": "https://www.last.fm/api/auth/?token=abc"},
+            {"sessionKey": "session", "username": "listener"},
+        ]
+    )
+    client.session = fake  # type: ignore[assignment]
+
+    token, auth_url = client.request_token()
+    session_key, username = client.create_session(token)
+
+    assert token == "abc"
+    assert auth_url == "https://www.last.fm/api/auth/?token=abc"
+    assert session_key == "session"
+    assert username == "listener"
+    assert fake.posts[0]["url"] == "https://example.test/api/lastfm/token"
+    assert fake.posts[1]["json"] == {"token": "abc"}
+
+
+def test_lastfm_proxy_scrobbles_radio_tracks() -> None:
+    client = LastFmProxyClient(proxy_url="https://example.test/api/lastfm", session_key="session")
+    fake = FakeJsonSession([{"ok": True}, {"ok": True}])
+    client.session = fake  # type: ignore[assignment]
+    entry = TrackEntry("Artist", "Song", "Artist - Song", dt.datetime(2026, 5, 9, 17, 0))
+
+    client.update_now_playing(entry)
+    client.scrobble(entry)
+
+    assert fake.posts[0]["url"] == "https://example.test/api/lastfm/now-playing"
+    assert fake.posts[0]["json"] == {
+        "sessionKey": "session",
+        "artist": "Artist",
+        "track": "Song",
+    }
+    assert fake.posts[1]["json"]["timestamp"] == str(int(entry.timestamp.timestamp()))
 
 
 def test_scrobble_skips_uncertain_metadata() -> None:
@@ -87,3 +132,24 @@ class FakeResponse:
 
     def raise_for_status(self) -> None:
         return None
+
+
+class FakeJsonSession:
+    def __init__(self, payloads: list[dict[str, object]]) -> None:
+        self.payloads = payloads
+        self.posts: list[dict[str, object]] = []
+
+    def post(self, url: str, *, json: dict[str, str], timeout: float):
+        self.posts.append({"url": url, "json": json, "timeout": timeout})
+        return FakeJsonResponse(self.payloads.pop(0))
+
+
+class FakeJsonResponse:
+    ok = True
+    status_code = 200
+
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    def json(self) -> dict[str, object]:
+        return self.payload

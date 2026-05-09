@@ -108,6 +108,78 @@ class LastFmClient:
         _raise_for_lfm_failure(response.text)
 
 
+class LastFmProxyClient:
+    def __init__(
+        self,
+        *,
+        proxy_url: str,
+        session_key: str = "",
+        timeout: float = 12.0,
+    ) -> None:
+        self.proxy_url = proxy_url.rstrip("/")
+        self.session_key = session_key
+        self.timeout = timeout
+        self.session = requests.Session()
+
+    def request_token(self) -> tuple[str, str]:
+        payload = self._post("token", {})
+        token = str(payload.get("token") or "")
+        auth_url = str(payload.get("authUrl") or "")
+        if not token or not auth_url:
+            raise LastFmError("Last.fm proxy did not return an auth token")
+        return token, auth_url
+
+    def create_session(self, token: str) -> tuple[str, str]:
+        payload = self._post("session", {"token": token})
+        session_key = str(payload.get("sessionKey") or "")
+        username = str(payload.get("username") or "")
+        if not session_key:
+            raise LastFmError("Last.fm proxy did not return a session key")
+        return session_key, username
+
+    def update_now_playing(self, entry: TrackEntry) -> None:
+        if entry.uncertain or not entry.artist or not entry.title:
+            return
+        self._post(
+            "now-playing",
+            {
+                "sessionKey": self.session_key,
+                "artist": entry.artist,
+                "track": entry.title,
+            },
+        )
+
+    def scrobble(self, entry: TrackEntry) -> None:
+        if entry.uncertain or not entry.artist or not entry.title:
+            return
+        self._post(
+            "scrobble",
+            {
+                "sessionKey": self.session_key,
+                "artist": entry.artist,
+                "track": entry.title,
+                "timestamp": str(int(entry.timestamp.timestamp())),
+            },
+        )
+
+    def _post(self, action: str, payload: dict[str, str]) -> dict[str, object]:
+        response = self.session.post(
+            f"{self.proxy_url}/{action}",
+            json=payload,
+            timeout=self.timeout,
+        )
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if not response.ok:
+            message = body.get("error") if isinstance(body, dict) else ""
+            raise LastFmError(str(message or f"Last.fm proxy request failed: {response.status_code}"))
+        if not isinstance(body, dict):
+            raise LastFmError("Last.fm proxy returned an invalid response")
+        return body
+
+
 class LastFmScrobbleCache:
     def __init__(self, path: Path) -> None:
         self.path = path

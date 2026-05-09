@@ -48,7 +48,8 @@ class StationScoutFrame(wx.Frame):
         self.timer_fired_today: set[tuple[str, str, str]] = set()
         self.notifier = create_notifier(parent=self)
         self.track_session: TrackSessionLog | None = None
-        self.track_stop_event = threading.Event()
+        self.metadata_stop_event = threading.Event()
+        self.track_stop_at = ""
         self.track_reader = IcyMetadataReader()
         self.lastfm_client = self._create_lastfm_client()
         self.lastfm_cache = LastFmScrobbleCache(self.store.path.parent / "lastfm-scrobble-cache.jsonl")
@@ -142,8 +143,6 @@ class StationScoutFrame(wx.Frame):
 
         actions_box = wx.StaticBoxSizer(wx.HORIZONTAL, panel, "Station actions")
         self.play_button = wx.Button(panel, label="Play selected")
-        self.pause_button = wx.Button(panel, label="Pause")
-        self.stop_button = wx.Button(panel, label="Stop")
         self.favorite_button = wx.Button(panel, label="Add favorite")
         self.website_button = wx.Button(panel, label="Open website")
         self.timer_button = wx.Button(panel, label="Add tune-in timer")
@@ -151,8 +150,6 @@ class StationScoutFrame(wx.Frame):
         self.stop_tracking_button = wx.Button(panel, label="Stop tracking")
         for button in (
             self.play_button,
-            self.pause_button,
-            self.stop_button,
             self.favorite_button,
             self.website_button,
             self.timer_button,
@@ -219,9 +216,7 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _event: self.stop_tracking(), id=self.ID_STOP_TRACKING)
         self.Bind(wx.EVT_BUTTON, self._on_search, self.search_button)
         self.Bind(wx.EVT_BUTTON, self._on_direct_stream_fallback, self.direct_stream_button)
-        self.Bind(wx.EVT_BUTTON, self._on_play_selected, self.play_button)
-        self.Bind(wx.EVT_BUTTON, lambda _event: self.toggle_pause(), self.pause_button)
-        self.Bind(wx.EVT_BUTTON, lambda _event: self.stop_playback(), self.stop_button)
+        self.Bind(wx.EVT_BUTTON, self._on_playback_button, self.play_button)
         self.Bind(wx.EVT_BUTTON, self._on_add_favorite, self.favorite_button)
         self.Bind(wx.EVT_BUTTON, self._on_open_website, self.website_button)
         self.Bind(wx.EVT_BUTTON, self._on_add_timer, self.timer_button)
@@ -325,6 +320,12 @@ class StationScoutFrame(wx.Frame):
         if station:
             self.play_station(station)
 
+    def _on_playback_button(self, _event: wx.Event) -> None:
+        if self.player.is_playing() or self.player.is_paused():
+            self.toggle_pause()
+            return
+        self._on_play_selected(_event)
+
     def _on_focus_search(self, _event: wx.Event) -> None:
         self.name_input.SetFocus()
         self.name_input.SelectAll()
@@ -360,7 +361,8 @@ class StationScoutFrame(wx.Frame):
             return
         if self.current_station:
             self.current_station = Station.from_api({**self.current_station.to_json(), "url_resolved": url})
-        self.player.play(url)
+        if self.player.play(url) and self.current_station:
+            self._start_metadata_monitor(self.current_station)
 
     def _record_radio_browser_click(self, station: Station) -> None:
         def worker() -> None:
@@ -380,22 +382,24 @@ class StationScoutFrame(wx.Frame):
 
     def _on_player_started(self) -> None:
         self._set_status(f"Playing {self.current_station.name if self.current_station else 'stream'}.")
-        self.pause_button.SetLabel("Pause")
+        self._refresh_playback_button()
 
     def _on_player_stopped(self) -> None:
         self._set_status("Stopped.")
-        self.pause_button.SetLabel("Pause")
+        self._refresh_playback_button()
         self._set_playback_title()
 
     def _on_player_error(self, message: str) -> None:
-        self.pause_button.SetLabel("Pause")
+        self._stop_metadata_monitor()
+        self._refresh_playback_button()
         self._set_playback_title()
         self._show_error(RadioBrowserError(message))
 
     def stop_playback(self) -> None:
+        self._stop_metadata_monitor()
         self.player.stop()
         self._set_status("Stopped.")
-        self.pause_button.SetLabel("Pause")
+        self._refresh_playback_button()
         self._set_playback_title()
 
     def toggle_pause(self) -> None:
@@ -408,11 +412,10 @@ class StationScoutFrame(wx.Frame):
             return
         if self.player.toggle_pause():
             if self.player.is_paused():
-                self.pause_button.SetLabel("Resume")
                 self._set_status("Paused.")
             else:
-                self.pause_button.SetLabel("Pause")
                 self._set_status(f"Playing {self.current_station.name}.")
+            self._refresh_playback_button()
         else:
             self.play_station(self.current_station)
 
@@ -541,6 +544,47 @@ class StationScoutFrame(wx.Frame):
     def _set_playback_title(self, now_playing: str = "") -> None:
         self.SetTitle(playback_window_title(now_playing))
 
+    def _refresh_playback_button(self) -> None:
+        if self.player.is_paused():
+            self.play_button.SetLabel("Resume")
+        elif self.player.is_playing():
+            self.play_button.SetLabel("Pause")
+        else:
+            self.play_button.SetLabel("Play selected")
+
+    def _start_metadata_monitor(self, station: Station) -> None:
+        self._stop_metadata_monitor()
+        self.metadata_stop_event = threading.Event()
+        stop_event = self.metadata_stop_event
+
+        def worker() -> None:
+            try:
+                for raw_title in self.track_reader.titles(station.url_resolved):
+                    if stop_event.is_set():
+                        break
+                    entry = parse_stream_title(raw_title)
+                    if entry:
+                        wx.CallAfter(self._on_stream_title, station.stationuuid, entry)
+            except (requests.RequestException, ValueError) as exc:
+                wx.CallAfter(self._set_status, f"No stream title metadata: {exc}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _stop_metadata_monitor(self) -> None:
+        self.metadata_stop_event.set()
+
+    def _on_stream_title(self, stationuuid: str, entry) -> None:
+        if not self.current_station or self.current_station.stationuuid != stationuuid:
+            return
+        if self.track_stop_at and _stop_time_reached(self.track_stop_at):
+            self.stop_tracking()
+        line = entry.display_line()
+        self._set_playback_title(line)
+        self.now_playing.SetLabel(f"{line}\n{self.current_station.name}")
+        if self.track_session and self.track_session.add(entry):
+            self._send_lastfm(entry)
+            self._set_status(f"Tracked: {line}")
+
     def _on_start_tracking(self, _event: wx.Event) -> None:
         station = self.current_station or self._selected_station()
         if not station:
@@ -555,35 +599,23 @@ class StationScoutFrame(wx.Frame):
         show_name: str = "",
         stop_at: str = "",
     ) -> None:
-        self.stop_tracking()
-        self.track_stop_event.clear()
+        self.track_session = None
         log_root = self.store.track_log_folder(self.state)
         self.track_session = TrackSessionLog(root=log_root, station=station, show_name=show_name)
+        self.track_stop_at = stop_at
         self._set_status(f"Tracking songs to {self.track_session.path}")
         self._notify("Playlist tracking started", show_name or station.name)
-
-        def worker() -> None:
-            try:
-                for raw_title in self.track_reader.titles(station.url_resolved):
-                    if self.track_stop_event.is_set() or _stop_time_reached(stop_at):
-                        break
-                    entry = parse_stream_title(raw_title)
-                    if entry and self.track_session and self.track_session.add(entry):
-                        self._send_lastfm(entry)
-                        wx.CallAfter(self._set_status, f"Tracked: {entry.display_line()}")
-                        wx.CallAfter(self._set_playback_title, entry.display_line())
-            except BaseException as exc:
-                wx.CallAfter(self._set_status, f"Tracking stopped: {exc}")
-            finally:
-                wx.CallAfter(self._notify, "Playlist tracking stopped", show_name or station.name)
-
-        threading.Thread(target=worker, daemon=True).start()
+        if self.current_station is None or self.current_station.stationuuid != station.stationuuid:
+            self.play_station(station)
+        elif not self.player.is_playing() and not self.player.is_paused():
+            self.play_station(station)
 
     def stop_tracking(self) -> None:
-        self.track_stop_event.set()
         if self.track_session:
             self._set_status(f"Tracking saved to {self.track_session.path}")
+            self._notify("Playlist tracking stopped", self.track_session.show_name or self.track_session.station.name)
         self.track_session = None
+        self.track_stop_at = ""
 
     def _on_choose_log_folder(self, _event: wx.Event) -> None:
         dialog = wx.DirDialog(

@@ -15,7 +15,7 @@ dependencies = [
     "desktop-notifier>=6.2; sys_platform == 'darwin'",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "build>=1.2",
     "pytest>=8.0",

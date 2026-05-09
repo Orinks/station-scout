@@ -430,7 +430,7 @@ dependencies = [
     { name = "wxpython" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "build" },
     { name = "pytest" },
@@ -439,15 +439,18 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2" },
     { name = "desktop-notifier", marker = "sys_platform == 'darwin'", specifier = ">=6.2" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "requests", specifier = ">=2.32" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "toasted", marker = "sys_platform == 'win32'", specifier = ">=0.2" },
     { name = "wxpython", specifier = ">=4.2" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "build", specifier = ">=1.2" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "ruff", specifier = ">=0.5" },
+]
 
 [[package]]
 name = "toasted"

@@ -52,13 +52,13 @@ platform-specific backends:
 ## Run
 
 ```powershell
-uv run --extra dev station-scout
+uv run station-scout
 ```
 
 ## Test
 
 ```powershell
-uv run --extra dev python -m pytest
-uv run --extra dev python -m ruff check .
-uv run --extra dev python -m build
+uv run pytest
+uv run ruff check .
+uv run python -m build
 ```

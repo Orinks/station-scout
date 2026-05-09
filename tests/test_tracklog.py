@@ -32,6 +32,16 @@ def test_parse_artist_title_from_provider_metadata_blob() -> None:
     assert entry.display_line() == "Justin Bieber - Yukon"
 
 
+def test_parse_marks_non_music_provider_metadata_uncertain() -> None:
+    entry = parse_stream_title(
+        'Philly\'s #1 Hit Music Station - text="Q102" song_spot="T" MediaBaseId="0"'
+    )
+
+    assert entry is not None
+    assert entry.uncertain
+    assert entry.display_line() == "Philly's #1 Hit Music Station - Q102 ?"
+
+
 def test_unknown_or_bad_metadata_is_kept_but_marked_uncertain() -> None:
     entry = parse_stream_title("Transmission FM Station ID")
 

@@ -41,6 +41,9 @@ def parse_stream_title(raw_title: str, *, now: dt.datetime | None = None) -> Tra
         return None
     lowered = raw.lower()
     uncertain = any(marker in lowered for marker in INVALID_TITLE_MARKERS)
+    song_spot = _metadata_attribute(raw, "song_spot")
+    if song_spot and song_spot.upper() != "M":
+        uncertain = True
 
     artist = ""
     title = ""
@@ -139,10 +142,16 @@ def _clean(value: str) -> str:
 
 
 def _metadata_text_value(value: str) -> str:
-    match = re.search(r"""\btext=(?P<quote>["'])(?P<text>.*?)(?P=quote)""", value, re.IGNORECASE)
-    if not match:
-        return ""
-    return _clean(match.group("text"))
+    return _clean(_metadata_attribute(value, "text"))
+
+
+def _metadata_attribute(value: str, name: str) -> str:
+    match = re.search(
+        rf"""\b{re.escape(name)}=(?P<quote>["'])(?P<value>.*?)(?P=quote)""",
+        value,
+        re.IGNORECASE,
+    )
+    return match.group("value") if match else ""
 
 
 def _slug(value: str) -> str:

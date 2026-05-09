@@ -13,6 +13,7 @@ dependencies = [
     "requests>=2.32",
     "toasted>=0.2; sys_platform == 'win32'",
     "desktop-notifier>=6.2; sys_platform == 'darwin'",
+    "sound-lib>=0.83",
 ]
 
 [dependency-groups]

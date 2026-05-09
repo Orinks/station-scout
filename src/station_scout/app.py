@@ -4,18 +4,17 @@ import datetime as dt
 import threading
 import webbrowser
 from collections.abc import Callable
-from urllib.parse import urlparse
 
 import requests
 import wx
 import wx.adv
-import wx.media
 
 from station_scout.direct_streams import station_from_direct_url, streamurl_search_url
 from station_scout.integrations_config import lastfm_app_config, spotify_app_config
 from station_scout.lastfm import LastFmClient, LastFmError, LastFmScrobbleCache
 from station_scout.models import Station, TuneTimer
 from station_scout.notifications import create_notifier
+from station_scout.player import RadioPlayer
 from station_scout.radio_browser import RadioBrowserClient, RadioBrowserError
 from station_scout.schedule import due_timers
 from station_scout.storage import SettingsStore, add_unique_station
@@ -46,6 +45,11 @@ class StationScoutFrame(wx.Frame):
         self.track_reader = IcyMetadataReader()
         self.lastfm_client = self._create_lastfm_client()
         self.lastfm_cache = LastFmScrobbleCache(self.store.path.parent / "lastfm-scrobble-cache.jsonl")
+        self.player = RadioPlayer(
+            on_playing=self._on_player_started,
+            on_stopped=self._on_player_stopped,
+            on_error=self._on_player_error,
+        )
 
         self._build_menu()
         self._build_controls()
@@ -159,7 +163,6 @@ class StationScoutFrame(wx.Frame):
         now_playing_label = wx.StaticText(panel, label="Now playing")
         self.now_playing = wx.StaticText(panel, label="Nothing playing")
         self.now_playing.Wrap(280)
-        self.media = wx.media.MediaCtrl(panel, style=wx.SIMPLE_BORDER)
         favorites_label = wx.StaticText(panel, label="Favorites")
         self.favorites_list = wx.ListBox(panel, name="Favorites")
         _describe_control(self.favorites_list, "Favorites")
@@ -171,7 +174,6 @@ class StationScoutFrame(wx.Frame):
         _describe_control(self.timers_list, "Tune-in timers")
         side.Add(now_playing_label, 0, wx.BOTTOM, 4)
         side.Add(self.now_playing, 0, wx.EXPAND | wx.BOTTOM, 8)
-        side.Add(self.media, 0, wx.EXPAND | wx.BOTTOM, 12)
         side.Add(favorites_label, 0, wx.BOTTOM, 4)
         side.Add(self.favorites_list, 1, wx.EXPAND | wx.BOTTOM, 8)
         side.Add(recents_label, 0, wx.BOTTOM, 4)
@@ -207,7 +209,6 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self._on_start_tracking, self.start_tracking_button)
         self.Bind(wx.EVT_BUTTON, lambda _event: self.stop_tracking(), self.stop_tracking_button)
         self.station_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play_selected)
-        self.media.Bind(wx.media.EVT_MEDIA_LOADED, self._on_media_loaded)
         self.favorites_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("favorites"))
         self.recents_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("recents"))
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
@@ -335,23 +336,21 @@ class StationScoutFrame(wx.Frame):
         if not url:
             self._show_error(RadioBrowserError("Radio Browser did not return a stream URL."))
             return
-        loaded = self.media.LoadURI(url) if _is_network_url(url) else self.media.Load(url)
-        if loaded:
-            self.media.Play()
-            if self.current_station:
-                self.current_station = Station.from_api({**self.current_station.to_json(), "url_resolved": url})
-            station_name = self.current_station.name if self.current_station else "stream"
-            self._set_status(f"Starting {station_name}...")
-        else:
-            self._show_error(RadioBrowserError(f"wxPython could not load this stream: {url}"))
+        if self.current_station:
+            self.current_station = Station.from_api({**self.current_station.to_json(), "url_resolved": url})
+        self.player.play(url)
 
-    def _on_media_loaded(self, event: wx.media.MediaEvent) -> None:
-        self.media.Play()
+    def _on_player_started(self) -> None:
         self._set_status(f"Playing {self.current_station.name if self.current_station else 'stream'}.")
-        event.Skip()
+
+    def _on_player_stopped(self) -> None:
+        self._set_status("Stopped.")
+
+    def _on_player_error(self, message: str) -> None:
+        self._show_error(RadioBrowserError(message))
 
     def stop_playback(self) -> None:
-        self.media.Stop()
+        self.player.stop()
         self._set_status("Stopped.")
 
     def _on_add_favorite(self, _event: wx.Event) -> None:
@@ -829,10 +828,6 @@ def _stop_time_reached(stop_at: str) -> bool:
     if not stop_at:
         return False
     return dt.datetime.now().strftime("%H:%M") >= stop_at
-
-
-def _is_network_url(url: str) -> bool:
-    return urlparse(url).scheme.lower() in {"http", "https", "icy"}
 
 
 class StationScoutApp(wx.App):

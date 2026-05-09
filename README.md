@@ -52,14 +52,13 @@ platform-specific backends:
 ## Run
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python -m pip install -e ".[dev]"
-.\.venv\Scripts\station-scout
+uv run --extra dev station-scout
 ```
 
 ## Test
 
 ```powershell
-.\.venv\Scripts\python -m pytest
-.\.venv\Scripts\python -m ruff check .
+uv run --extra dev python -m pytest
+uv run --extra dev python -m ruff check .
+uv run --extra dev python -m build
 ```

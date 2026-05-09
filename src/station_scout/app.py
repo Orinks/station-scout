@@ -10,6 +10,7 @@ import wx.adv
 import wx.media
 
 from station_scout.models import Station, TuneTimer
+from station_scout.notifications import create_notifier
 from station_scout.radio_browser import RadioBrowserClient, RadioBrowserError
 from station_scout.schedule import due_timers
 from station_scout.storage import SettingsStore, add_unique_station
@@ -27,6 +28,7 @@ class StationScoutFrame(wx.Frame):
         self.results: list[Station] = []
         self.current_station: Station | None = None
         self.timer_fired_today: set[tuple[str, str, str]] = set()
+        self.notifier = create_notifier(parent=self)
 
         self._build_controls()
         self._bind_events()
@@ -303,8 +305,7 @@ class StationScoutFrame(wx.Frame):
         self._notify("Station Scout error", str(exc))
 
     def _notify(self, title: str, message: str) -> None:
-        notification = wx.adv.NotificationMessage(title, message, parent=self)
-        notification.Show(timeout=wx.adv.NotificationMessage.Timeout_Auto)
+        self.notifier.notify(title, message)
 
     def _run_background(
         self,

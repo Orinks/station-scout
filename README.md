@@ -11,6 +11,16 @@ V1 focuses on:
 - Desktop notifications
 - Per-station tune-in timers
 
+## Notifications
+
+Station Scout uses wxPython for the desktop frontend. Native notifications are routed through
+platform-specific backends:
+
+- Windows: Toasted, so portable builds can register an app ID and appear correctly in Action Center.
+- macOS: desktop-notifier, which follows the modern Notification Center path for signed Python apps
+  or signed app bundles.
+- Development fallback: `wx.adv.NotificationMessage` if the platform backend is unavailable.
+
 ## Run
 
 ```powershell

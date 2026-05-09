@@ -12,6 +12,19 @@ import requests
 import wx
 import wx.adv
 
+from station_scout.cast import (
+    CastDevice,
+    discover_chromecasts,
+    discover_sonos,
+    change_chromecast_volume,
+    change_sonos_volume,
+    play_on_chromecast,
+    play_on_sonos,
+    stop_chromecast,
+    stop_sonos,
+    toggle_chromecast_pause,
+    toggle_sonos_pause,
+)
 from station_scout.direct_streams import station_from_direct_url, streamurl_search_url
 from station_scout.integrations_config import lastfm_app_config, spotify_app_config
 from station_scout.lastfm import LastFmClient, LastFmError, LastFmProxyClient, LastFmScrobbleCache
@@ -97,6 +110,8 @@ class StationScoutFrame(wx.Frame):
         self.metadata_stop_event = threading.Event()
         self.track_stop_at = ""
         self.track_reader = IcyMetadataReader()
+        self.chromecast_device: CastDevice | None = None
+        self.sonos_device: CastDevice | None = None
         self.spotify_callback_server: http.server.ThreadingHTTPServer | None = None
         self.spotify_auth_redirect_uri = ""
         self.settings_dialog: SettingsDialog | None = None
@@ -128,6 +143,9 @@ class StationScoutFrame(wx.Frame):
         self.ID_STOP_PLAYBACK = wx.NewIdRef()
         self.ID_VOLUME_UP = wx.NewIdRef()
         self.ID_VOLUME_DOWN = wx.NewIdRef()
+        self.ID_PLAY_ON_COMPUTER = wx.NewIdRef()
+        self.ID_CAST_CHROMECAST = wx.NewIdRef()
+        self.ID_CAST_SONOS = wx.NewIdRef()
         self.ID_ADD_TIMER = wx.NewIdRef()
         self.ID_SETTINGS = wx.NewIdRef()
         self.ID_START_TRACKING = wx.NewIdRef()
@@ -147,6 +165,10 @@ class StationScoutFrame(wx.Frame):
         playback_menu.Append(self.ID_STOP_PLAYBACK, "Stop\tCtrl+S")
         playback_menu.Append(self.ID_VOLUME_UP, "Volume up\tCtrl+Up")
         playback_menu.Append(self.ID_VOLUME_DOWN, "Volume down\tCtrl+Down")
+        playback_menu.AppendSeparator()
+        playback_menu.Append(self.ID_PLAY_ON_COMPUTER, "Play on this computer")
+        playback_menu.Append(self.ID_CAST_SONOS, "Play on Sonos...")
+        playback_menu.Append(self.ID_CAST_CHROMECAST, "Cast to Chromecast...")
         playback_menu.AppendSeparator()
         playback_menu.Append(self.ID_ADD_TIMER, "Add tune-in timer\tCtrl+T")
         playback_menu.Append(self.ID_START_TRACKING, "Start tracking\tCtrl+Shift+T")
@@ -260,6 +282,9 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _event: self.stop_playback(), id=self.ID_STOP_PLAYBACK)
         self.Bind(wx.EVT_MENU, lambda _event: self.adjust_volume(0.1), id=self.ID_VOLUME_UP)
         self.Bind(wx.EVT_MENU, lambda _event: self.adjust_volume(-0.1), id=self.ID_VOLUME_DOWN)
+        self.Bind(wx.EVT_MENU, self._on_play_on_computer, id=self.ID_PLAY_ON_COMPUTER)
+        self.Bind(wx.EVT_MENU, self._on_cast_sonos, id=self.ID_CAST_SONOS)
+        self.Bind(wx.EVT_MENU, self._on_cast_chromecast, id=self.ID_CAST_CHROMECAST)
         self.Bind(wx.EVT_MENU, self._on_add_timer, id=self.ID_ADD_TIMER)
         self.Bind(wx.EVT_MENU, self._on_start_tracking, id=self.ID_START_TRACKING)
         self.Bind(wx.EVT_MENU, lambda _event: self.stop_tracking(), id=self.ID_STOP_TRACKING)
@@ -370,6 +395,9 @@ class StationScoutFrame(wx.Frame):
             self.play_station(station)
 
     def _on_playback_button(self, _event: wx.Event) -> None:
+        if self._remote_output_device() and self.current_station:
+            self.toggle_pause()
+            return
         if self.player.is_playing() or self.player.is_paused():
             self.toggle_pause()
             return
@@ -415,7 +443,31 @@ class StationScoutFrame(wx.Frame):
             return
         if self.current_station:
             self.current_station = Station.from_api({**self.current_station.to_json(), "url_resolved": url})
-        if self.player.play(url) and self.current_station:
+        if not self.current_station:
+            return
+        if self.sonos_device:
+            device = self.sonos_device
+            station = self.current_station
+            self.player.stop(notify=False)
+            self._set_status(f"Playing {station.name} on Sonos: {device.name}...")
+            self._run_background(
+                lambda: play_on_sonos(device, station, url),
+                lambda _result: self._on_sonos_started(station, device),
+                self._on_player_error,
+            )
+            return
+        if self.chromecast_device:
+            device = self.chromecast_device
+            station = self.current_station
+            self.player.stop(notify=False)
+            self._set_status(f"Casting {station.name} to {device.name}...")
+            self._run_background(
+                lambda: play_on_chromecast(device, station, url),
+                lambda _result: self._on_chromecast_started(station, device),
+                self._on_player_error,
+            )
+            return
+        if self.player.play(url):
             self._start_metadata_monitor(self.current_station)
 
     def _record_radio_browser_click(self, station: Station) -> None:
@@ -438,6 +490,16 @@ class StationScoutFrame(wx.Frame):
         self._set_status(f"Playing {self.current_station.name if self.current_station else 'stream'}.")
         self._refresh_playback_button()
 
+    def _on_chromecast_started(self, station: Station, device: CastDevice) -> None:
+        self._set_status(f"Casting {station.name} to {device.name}.")
+        self._start_metadata_monitor(station)
+        self._refresh_playback_button()
+
+    def _on_sonos_started(self, station: Station, device: CastDevice) -> None:
+        self._set_status(f"Playing {station.name} on Sonos: {device.name}.")
+        self._start_metadata_monitor(station)
+        self._refresh_playback_button()
+
     def _on_player_stopped(self) -> None:
         self._set_status("Stopped.")
         self._refresh_playback_button()
@@ -451,12 +513,34 @@ class StationScoutFrame(wx.Frame):
 
     def stop_playback(self) -> None:
         self._stop_metadata_monitor()
+        if self.sonos_device:
+            device = self.sonos_device
+            self._run_background(lambda: stop_sonos(device), lambda _result: None, self._show_error)
+        if self.chromecast_device:
+            device = self.chromecast_device
+            self._run_background(lambda: stop_chromecast(device), lambda _result: None, self._show_error)
         self.player.stop()
         self._set_status("Stopped.")
         self._refresh_playback_button()
         self._set_playback_title()
 
     def toggle_pause(self) -> None:
+        if self.sonos_device:
+            device = self.sonos_device
+            self._run_background(
+                lambda: toggle_sonos_pause(device),
+                lambda paused: self._on_remote_pause_changed(bool(paused)),
+                self._show_error,
+            )
+            return
+        if self.chromecast_device:
+            device = self.chromecast_device
+            self._run_background(
+                lambda: toggle_chromecast_pause(device),
+                lambda paused: self._on_remote_pause_changed(bool(paused)),
+                self._show_error,
+            )
+            return
         if not self.current_station:
             station = self._selected_station()
             if station:
@@ -474,8 +558,100 @@ class StationScoutFrame(wx.Frame):
             self.play_station(self.current_station)
 
     def adjust_volume(self, delta: float) -> None:
+        if self.sonos_device:
+            device = self.sonos_device
+            self._run_background(
+                lambda: change_sonos_volume(device, delta),
+                self._on_remote_volume_changed,
+                self._show_error,
+            )
+            return
+        if self.chromecast_device:
+            device = self.chromecast_device
+            self._run_background(
+                lambda: change_chromecast_volume(device, delta),
+                self._on_remote_volume_changed,
+                self._show_error,
+            )
+            return
         level = self.player.change_volume(delta)
         self._set_status(f"Volume {round(level * 100)} percent.")
+
+    def _on_remote_pause_changed(self, paused: bool) -> None:
+        self._set_status("Paused." if paused else f"Playing {self.current_station.name if self.current_station else 'stream'}.")
+        self._refresh_playback_button()
+
+    def _on_remote_volume_changed(self, result: object) -> None:
+        try:
+            level = float(result)
+        except (TypeError, ValueError):
+            return
+        self._set_status(f"Volume {round(level * 100)} percent.")
+
+    def _on_play_on_computer(self, _event: wx.Event) -> None:
+        previous_device = self.chromecast_device
+        previous_sonos = self.sonos_device
+        self.chromecast_device = None
+        self.sonos_device = None
+        if previous_device:
+            self._run_background(lambda: stop_chromecast(previous_device), lambda _result: None, self._show_error)
+        if previous_sonos:
+            self._run_background(lambda: stop_sonos(previous_sonos), lambda _result: None, self._show_error)
+        self._set_status("Output set to this computer.")
+        if self.current_station:
+            self.play_station(self.current_station)
+
+    def _on_cast_sonos(self, _event: wx.Event) -> None:
+        self._set_status("Searching for Sonos speakers...")
+        self._run_background(discover_sonos, self._choose_sonos, self._show_error)
+
+    def _on_cast_chromecast(self, _event: wx.Event) -> None:
+        self._set_status("Searching for Chromecasts...")
+        self._run_background(discover_chromecasts, self._choose_chromecast, self._show_error)
+
+    def _choose_sonos(self, result: object) -> None:
+        devices = result if isinstance(result, list) else []
+        if not devices:
+            self._set_status("No Sonos speakers found on this network.")
+            return
+        dialog = RemoteOutputDialog(self, devices, title="Play on Sonos", label="Sonos speaker")
+        try:
+            if dialog.ShowModal() != wx.ID_OK:
+                self._set_status("Sonos output unchanged.")
+                return
+            self.sonos_device = dialog.selected_device()
+            self.chromecast_device = None
+        finally:
+            dialog.Destroy()
+        if not self.sonos_device:
+            self._set_status("Sonos output unchanged.")
+            return
+        self._set_status(f"Output set to Sonos: {self.sonos_device.name}")
+        station = self.current_station or self._selected_station()
+        if station:
+            self.play_station(station)
+
+    def _choose_chromecast(self, result: object) -> None:
+        devices = result if isinstance(result, list) else []
+        if not devices:
+            self._set_status("No Chromecasts found on this network.")
+            return
+        dialog = RemoteOutputDialog(self, devices, title="Cast to Chromecast", label="Chromecast")
+        try:
+            if dialog.ShowModal() != wx.ID_OK:
+                self._set_status("Chromecast output unchanged.")
+                return
+            self.chromecast_device = dialog.selected_device()
+            self.sonos_device = None
+        finally:
+            dialog.Destroy()
+        if not self.chromecast_device:
+            self._set_status("Chromecast output unchanged.")
+            return
+        self._set_status(f"Output set to Chromecast: {self.chromecast_device.name}")
+        station = self.current_station or self._selected_station()
+        if station:
+            self.play_station(station)
 
     def _on_add_favorite(self, _event: wx.Event) -> None:
         station = self._selected_station() or self.current_station
@@ -600,6 +776,12 @@ class StationScoutFrame(wx.Frame):
         self.SetTitle(playback_window_title(now_playing))
 
     def _refresh_playback_button(self) -> None:
+        if self.sonos_device and self.current_station:
+            self.play_button.SetLabel("Play/Pause")
+            return
+        if self.chromecast_device and self.current_station:
+            self.play_button.SetLabel("Play/Pause")
+            return
         if self.player.is_paused():
             self.play_button.SetLabel("Resume")
         elif self.player.is_playing():
@@ -664,8 +846,11 @@ class StationScoutFrame(wx.Frame):
         self._notify("Playlist tracking started", show_name or station.name)
         if self.current_station is None or self.current_station.stationuuid != station.stationuuid:
             self.play_station(station)
-        elif not self.player.is_playing() and not self.player.is_paused():
+        elif not self._remote_output_device() and not self.player.is_playing() and not self.player.is_paused():
             self.play_station(station)
+
+    def _remote_output_device(self) -> CastDevice | None:
+        return self.sonos_device or self.chromecast_device
 
     def stop_tracking(self) -> None:
         session = self.track_session
@@ -993,6 +1178,38 @@ class DirectStreamDialog(wx.Dialog):
             webbrowser.open(streamurl_search_url(query))
             return
         self.name_input.SetFocus()
+
+    def _on_char_hook(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+            return
+        event.Skip()
+
+
+class RemoteOutputDialog(wx.Dialog):
+    def __init__(self, parent: wx.Window, devices: list[CastDevice], *, title: str, label: str) -> None:
+        super().__init__(parent, title=title)
+        self.devices = devices
+        root = wx.BoxSizer(wx.VERTICAL)
+        device_label = wx.StaticText(self, label=label)
+        self.device_list = wx.ListBox(self, choices=[device.name for device in devices], name=label)
+        _describe_control(self.device_list, label)
+        if devices:
+            self.device_list.SetSelection(0)
+        root.Add(device_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
+        root.Add(self.device_list, 1, wx.EXPAND | wx.ALL, 12)
+        root.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 12)
+        self.SetSizerAndFit(root)
+        self.SetMinSize((420, 260))
+        self.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self.EndModal(wx.ID_OK), self.device_list)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self.device_list.SetFocus()
+
+    def selected_device(self) -> CastDevice | None:
+        selection = self.device_list.GetSelection()
+        if selection == wx.NOT_FOUND or selection >= len(self.devices):
+            return None
+        return self.devices[selection]
 
     def _on_char_hook(self, event: wx.KeyEvent) -> None:
         if event.GetKeyCode() == wx.WXK_ESCAPE:

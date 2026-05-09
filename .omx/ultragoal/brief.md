@@ -1,0 +1,1 @@
+Create Station Scout V1 as a private GitHub repo under C:\Users\joshu\gh-projects. Station Scout is a desktop Radio Browser explorer with player, tray support, notifications, and per-station tune-in timers. Implement a small but working V1, verify locally, and commit meaningful milestones before pushing to a private Orinks/station-scout repository.

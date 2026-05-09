@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "createdAt": "2026-05-09T13:52:58.497Z",
+  "updatedAt": "2026-05-09T13:53:02.629Z",
+  "briefPath": ".omx/ultragoal/brief.md",
+  "goalsPath": ".omx/ultragoal/goals.json",
+  "ledgerPath": ".omx/ultragoal/ledger.jsonl",
+  "codexGoalMode": "aggregate",
+  "goals": [
+    {
+      "id": "G001-create-station-scout-v1-as-a-private",
+      "title": "Create Station Scout V1 as a private GitHub repo under C:\\Users\\joshu...",
+      "objective": "Create Station Scout V1 as a private GitHub repo under C:\\Users\\joshu\\gh-projects. Station Scout is a desktop Radio Browser explorer with player, tray support, notifications, and per-station tune-in timers. Implement a small but working V1, verify locally, and commit meaningful milestones before pushing to a private Orinks/station-scout repository.",
+      "status": "in_progress",
+      "attempt": 1,
+      "createdAt": "2026-05-09T13:52:58.497Z",
+      "updatedAt": "2026-05-09T13:53:02.629Z",
+      "startedAt": "2026-05-09T13:53:02.629Z"
+    }
+  ],
+  "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-create-station-scout-v1-as-a-private Create Station Scout V1 as a private GitHub repo under C:\\Users\\joshu...",
+  "activeGoalId": "G001-create-station-scout-v1-as-a-private"
+}

@@ -47,7 +47,9 @@ class RadioBrowserClient:
         }
         if name:
             params["name"] = name
-        if country:
+        if len(country) == 2 and country.isalpha():
+            params["countrycode"] = country.upper()
+        elif country:
             params["country"] = country
         if language:
             params["language"] = language
@@ -74,4 +76,3 @@ class RadioBrowserClient:
             except (requests.RequestException, ValueError) as exc:
                 errors.append(f"{url}: {exc}")
         raise RadioBrowserError("; ".join(errors) or "Radio Browser request failed.")
-

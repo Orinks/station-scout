@@ -12,7 +12,7 @@ import wx.media
 from station_scout.models import Station, TuneTimer
 from station_scout.radio_browser import RadioBrowserClient, RadioBrowserError
 from station_scout.schedule import due_timers
-from station_scout.storage import AppState, SettingsStore, add_unique_station
+from station_scout.storage import SettingsStore, add_unique_station
 
 
 APP_TITLE = "Station Scout"

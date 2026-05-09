@@ -41,10 +41,20 @@ def test_search_sends_filters_and_hides_broken_stations() -> None:
                 "order": "clicktrend",
                 "reverse": "true",
                 "name": "jazz",
-                "country": "US",
+                "countrycode": "US",
                 "language": "english",
                 "tag": "news",
             },
         )
     ]
 
+
+def test_search_treats_two_letter_country_as_country_code() -> None:
+    client = RadioBrowserClient(base_urls=["https://example.test"])
+    fake = FakeSession()
+    client.session = fake  # type: ignore[assignment]
+
+    client.search(country="us")
+
+    assert fake.calls[0][1]["countrycode"] == "US"
+    assert "country" not in fake.calls[0][1]

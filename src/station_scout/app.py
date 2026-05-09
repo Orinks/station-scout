@@ -25,6 +25,11 @@ from station_scout.tracklog import IcyMetadataReader, TrackSessionLog, parse_str
 APP_TITLE = "Station Scout"
 
 
+def _describe_control(control: wx.Window, label: str) -> None:
+    control.SetToolTip(label)
+    control.SetHelpText(label)
+
+
 class StationScoutFrame(wx.Frame):
     def __init__(self) -> None:
         super().__init__(None, title=APP_TITLE, size=(980, 680))
@@ -68,7 +73,7 @@ class StationScoutFrame(wx.Frame):
         file_menu.Append(self.ID_SETTINGS, "Settings...\tCtrl+,")
         file_menu.AppendSeparator()
         file_menu.Append(wx.ID_EXIT, "Quit\tAlt+F4")
-        menu_bar.Append(file_menu, "File")
+        menu_bar.Append(file_menu, "&File")
 
         playback_menu = wx.Menu()
         playback_menu.Append(self.ID_FOCUS_SEARCH, "Focus search\tCtrl+F")
@@ -78,7 +83,7 @@ class StationScoutFrame(wx.Frame):
         playback_menu.Append(self.ID_ADD_TIMER, "Add tune-in timer\tCtrl+T")
         playback_menu.Append(self.ID_START_TRACKING, "Start tracking\tCtrl+Shift+T")
         playback_menu.Append(self.ID_STOP_TRACKING, "Stop tracking\tCtrl+Shift+S")
-        menu_bar.Append(playback_menu, "Playback")
+        menu_bar.Append(playback_menu, "&Playback")
         self.SetMenuBar(menu_bar)
 
     def _build_controls(self) -> None:
@@ -87,13 +92,15 @@ class StationScoutFrame(wx.Frame):
 
         search_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Search stations")
         source_row = wx.BoxSizer(wx.HORIZONTAL)
+        source_label = wx.StaticText(panel, label="Source")
         self.search_source = wx.Choice(
             panel,
             choices=["Radio Browser", "Direct stream URL search"],
             name="Search source",
         )
+        _describe_control(self.search_source, "Search source")
         self.search_source.SetSelection(0)
-        source_row.Add(wx.StaticText(panel, label="Source"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        source_row.Add(source_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         source_row.Add(self.search_source, 0)
         search_box.Add(source_row, 0, wx.EXPAND | wx.ALL, 8)
 
@@ -101,20 +108,21 @@ class StationScoutFrame(wx.Frame):
         form.AddGrowableCol(1)
         form.AddGrowableCol(3)
 
-        self.name_input = wx.TextCtrl(panel, name="Station name or call letters")
-        self.country_input = wx.TextCtrl(panel, name="Country")
-        self.language_input = wx.TextCtrl(panel, name="Language")
-        self.tag_input = wx.TextCtrl(panel, name="Tag")
         self.name_label = wx.StaticText(panel, label="Name")
+        self.name_input = wx.TextCtrl(panel, name="Station name or call letters")
         self.country_label = wx.StaticText(panel, label="Country")
+        self.country_input = wx.TextCtrl(panel, name="Country")
         self.language_label = wx.StaticText(panel, label="Language")
+        self.language_input = wx.TextCtrl(panel, name="Language")
         self.tag_label = wx.StaticText(panel, label="Tag")
-        for label, control in (
-            (self.name_label, self.name_input),
-            (self.country_label, self.country_input),
-            (self.language_label, self.language_input),
-            (self.tag_label, self.tag_input),
+        self.tag_input = wx.TextCtrl(panel, name="Tag")
+        for label, control, accessible_label in (
+            (self.name_label, self.name_input, "Station name or call letters"),
+            (self.country_label, self.country_input, "Country"),
+            (self.language_label, self.language_input, "Language"),
+            (self.tag_label, self.tag_input, "Tag"),
         ):
+            _describe_control(control, accessible_label)
             form.Add(label, 0, wx.ALIGN_CENTER_VERTICAL)
             form.Add(control, 1, wx.EXPAND)
         search_box.Add(form, 0, wx.EXPAND | wx.ALL, 8)
@@ -146,31 +154,43 @@ class StationScoutFrame(wx.Frame):
             actions_box.Add(button, 0, wx.RIGHT, 8)
 
         body = wx.BoxSizer(wx.HORIZONTAL)
+        station_results = wx.BoxSizer(wx.VERTICAL)
+        station_results_label = wx.StaticText(panel, label="Stations")
         self.station_list = wx.ListCtrl(panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        _describe_control(self.station_list, "Stations")
         self.station_list.AppendColumn("Station", width=240)
         self.station_list.AppendColumn("Location", width=180)
         self.station_list.AppendColumn("Language", width=150)
         self.station_list.AppendColumn("Quality", width=170)
         self.station_list.AppendColumn("Source", width=140)
+        station_results.Add(station_results_label, 0, wx.BOTTOM, 4)
+        station_results.Add(self.station_list, 1, wx.EXPAND)
 
         side = wx.BoxSizer(wx.VERTICAL)
+        now_playing_label = wx.StaticText(panel, label="Now playing")
         self.now_playing = wx.StaticText(panel, label="Nothing playing")
         self.now_playing.Wrap(280)
         self.media = wx.media.MediaCtrl(panel, style=wx.SIMPLE_BORDER)
+        favorites_label = wx.StaticText(panel, label="Favorites")
         self.favorites_list = wx.ListBox(panel, name="Favorites")
+        _describe_control(self.favorites_list, "Favorites")
+        recents_label = wx.StaticText(panel, label="Recent stations")
         self.recents_list = wx.ListBox(panel, name="Recent stations")
+        _describe_control(self.recents_list, "Recent stations")
+        timers_label = wx.StaticText(panel, label="Timers")
         self.timers_list = wx.ListBox(panel, name="Tune-in timers")
-        side.Add(wx.StaticText(panel, label="Now playing"), 0, wx.BOTTOM, 4)
+        _describe_control(self.timers_list, "Tune-in timers")
+        side.Add(now_playing_label, 0, wx.BOTTOM, 4)
         side.Add(self.now_playing, 0, wx.EXPAND | wx.BOTTOM, 8)
         side.Add(self.media, 0, wx.EXPAND | wx.BOTTOM, 12)
-        side.Add(wx.StaticText(panel, label="Favorites"), 0, wx.BOTTOM, 4)
+        side.Add(favorites_label, 0, wx.BOTTOM, 4)
         side.Add(self.favorites_list, 1, wx.EXPAND | wx.BOTTOM, 8)
-        side.Add(wx.StaticText(panel, label="Recent stations"), 0, wx.BOTTOM, 4)
+        side.Add(recents_label, 0, wx.BOTTOM, 4)
         side.Add(self.recents_list, 1, wx.EXPAND | wx.BOTTOM, 8)
-        side.Add(wx.StaticText(panel, label="Timers"), 0, wx.BOTTOM, 4)
+        side.Add(timers_label, 0, wx.BOTTOM, 4)
         side.Add(self.timers_list, 1, wx.EXPAND)
 
-        body.Add(self.station_list, 2, wx.EXPAND | wx.RIGHT, 10)
+        body.Add(station_results, 2, wx.EXPAND | wx.RIGHT, 10)
         body.Add(side, 1, wx.EXPAND)
 
         self.CreateStatusBar()
@@ -289,6 +309,10 @@ class StationScoutFrame(wx.Frame):
             self.country_label.SetLabel("Website")
             self.language_label.SetLabel("Language")
             self.tag_label.SetLabel("Direct stream URL")
+            _describe_control(self.name_input, "Station name or call letters")
+            _describe_control(self.country_input, "Station website")
+            _describe_control(self.language_input, "Language")
+            _describe_control(self.tag_input, "Direct stream URL")
             self._set_status(
                 "Open direct URL search, copy the stream URL, then paste it into Direct stream URL."
             )
@@ -297,6 +321,10 @@ class StationScoutFrame(wx.Frame):
             self.country_label.SetLabel("Country")
             self.language_label.SetLabel("Language")
             self.tag_label.SetLabel("Tag")
+            _describe_control(self.name_input, "Station name")
+            _describe_control(self.country_input, "Country")
+            _describe_control(self.language_input, "Language")
+            _describe_control(self.tag_input, "Tag")
             self._set_status("Radio Browser search is ready.")
 
     def _on_open_direct_search(self, _event: wx.Event) -> None:
@@ -649,15 +677,12 @@ class SettingsDialog(wx.Dialog):
         root = wx.BoxSizer(wx.VERTICAL)
 
         storage_box = wx.StaticBoxSizer(wx.VERTICAL, self, "Playlist logs")
-        storage_box.Add(
-            wx.StaticText(self, label="Folder"),
-            0,
-            wx.LEFT | wx.RIGHT | wx.TOP,
-            12,
-        )
         folder_row = wx.BoxSizer(wx.HORIZONTAL)
+        folder_label = wx.StaticText(self, label="Folder")
         self.log_folder_value = wx.TextCtrl(self, style=wx.TE_READONLY)
+        _describe_control(self.log_folder_value, "Playlist log folder")
         self.log_folder_button = wx.Button(self, label="Choose folder")
+        folder_row.Add(folder_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         folder_row.Add(self.log_folder_value, 1, wx.EXPAND | wx.RIGHT, 8)
         folder_row.Add(self.log_folder_button, 0)
         storage_box.Add(folder_row, 0, wx.EXPAND | wx.ALL, 12)
@@ -738,15 +763,19 @@ class TimerDialog(wx.Dialog):
         self.auto_play = wx.CheckBox(self, label="Automatically start playback")
         self.auto_play.SetValue(True)
         self.track_playlist = wx.CheckBox(self, label="Track songs for this show")
+        show_name_label = wx.StaticText(self, label="Show name")
         self.show_name = wx.TextCtrl(self, name="Show name")
+        _describe_control(self.show_name, "Show name")
         end_row = wx.BoxSizer(wx.HORIZONTAL)
         end_row.Add(wx.StaticText(self, label="End time"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         self.end_time_picker = wx.adv.TimePickerCtrl(self)
+        _describe_control(self.time_picker, "Timer start time")
+        _describe_control(self.end_time_picker, "Timer end time")
         end_row.Add(self.end_time_picker, 0)
         root.Add(row, 0, wx.ALL, 12)
         root.Add(self.auto_play, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         root.Add(self.track_playlist, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
-        root.Add(wx.StaticText(self, label="Show name"), 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        root.Add(show_name_label, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         root.Add(self.show_name, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         root.Add(end_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         root.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 12)

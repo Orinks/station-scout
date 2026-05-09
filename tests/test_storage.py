@@ -12,6 +12,7 @@ def test_store_round_trips_state(tmp_path: Path) -> None:
         timers=[TuneTimer("abc", "Example", "18:00")],
         track_log_folder=str(tmp_path / "logs"),
         lastfm_enabled=True,
+        lastfm_scrobble_enabled=False,
         lastfm_username="listener",
         lastfm_session_key="session",
         spotify_enabled=True,
@@ -30,6 +31,7 @@ def test_store_round_trips_state(tmp_path: Path) -> None:
     assert loaded.timers == [TuneTimer("abc", "Example", "18:00")]
     assert loaded.track_log_folder == str(tmp_path / "logs")
     assert loaded.lastfm_enabled
+    assert not loaded.lastfm_scrobble_enabled
     assert loaded.lastfm_username == "listener"
     assert loaded.lastfm_session_key == "session"
     assert loaded.spotify_enabled
@@ -84,6 +86,16 @@ def test_track_log_folder_defaults_next_to_settings_file(tmp_path: Path) -> None
     store = SettingsStore(tmp_path / "settings.json")
 
     assert store.track_log_folder(AppState()) == tmp_path / "track sessions"
+
+
+def test_lastfm_scrobbling_defaults_on_for_loaded_state(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text('{"lastfm_enabled": true}', encoding="utf-8")
+    store = SettingsStore(settings_path, credentials=FakeCredentialStore())
+
+    loaded = store.load()
+
+    assert loaded.lastfm_scrobble_enabled
 
 
 class FakeCredentialStore:

@@ -26,6 +26,7 @@ class AppState:
     timers: list[TuneTimer] = field(default_factory=list)
     track_log_folder: str = ""
     lastfm_enabled: bool = False
+    lastfm_scrobble_enabled: bool = True
     lastfm_username: str = ""
     lastfm_session_key: str = ""
     lastfm_pending_token: str = ""
@@ -82,6 +83,7 @@ class SettingsStore:
             timers=_timers(payload.get("timers")),
             track_log_folder=str(payload.get("track_log_folder") or ""),
             lastfm_enabled=bool(payload.get("lastfm_enabled", False)),
+            lastfm_scrobble_enabled=bool(payload.get("lastfm_scrobble_enabled", True)),
             lastfm_username=str(payload.get("lastfm_username") or ""),
             spotify_enabled=bool(payload.get("spotify_enabled", False)),
             spotify_token_expires_at=int(payload.get("spotify_token_expires_at") or 0),
@@ -102,6 +104,7 @@ class SettingsStore:
             "timers": [timer.to_json() for timer in state.timers],
             "track_log_folder": state.track_log_folder,
             "lastfm_enabled": state.lastfm_enabled,
+            "lastfm_scrobble_enabled": state.lastfm_scrobble_enabled,
             "lastfm_username": state.lastfm_username,
             "spotify_enabled": state.spotify_enabled,
             "spotify_token_expires_at": state.spotify_token_expires_at,

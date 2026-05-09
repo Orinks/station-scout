@@ -17,7 +17,7 @@ from station_scout.notifications import create_notifier
 from station_scout.player import RadioPlayer
 from station_scout.radio_browser import RadioBrowserClient, RadioBrowserError
 from station_scout.schedule import due_timers
-from station_scout.storage import SettingsStore, add_unique_station
+from station_scout.storage import AppState, SettingsStore, add_unique_station
 from station_scout.spotify import SpotifyClient, build_spotify_auth_request
 from station_scout.tracklog import IcyMetadataReader, TrackSessionLog, parse_stream_title
 
@@ -37,6 +37,34 @@ def playback_window_title(now_playing: str = "") -> str:
     return f"{now_playing} - {APP_TITLE}"
 
 
+def lastfm_settings_view_state(state: AppState) -> tuple[str, str, bool]:
+    if state.lastfm_enabled:
+        return (
+            f"Connected as {state.lastfm_username or 'your account'}.",
+            "Reconnect Last.fm",
+            False,
+        )
+    if state.lastfm_pending_token:
+        return (
+            "Waiting for browser approval. Choose Finish Last.fm afterward.",
+            "Restart Last.fm",
+            True,
+        )
+    return "Not connected.", "Connect Last.fm", False
+
+
+def lastfm_track_key(entry) -> str:
+    return f"{entry.artist}\0{entry.title}".casefold()
+
+
+def should_scrobble_lastfm(state: AppState, entry, sent_tracks: set[str]) -> bool:
+    if not state.lastfm_enabled or not state.lastfm_scrobble_enabled:
+        return False
+    if entry.uncertain or not entry.artist or not entry.title:
+        return False
+    return lastfm_track_key(entry) not in sent_tracks
+
+
 class StationScoutFrame(wx.Frame):
     def __init__(self) -> None:
         super().__init__(None, title=APP_TITLE, size=(980, 680))
@@ -48,6 +76,7 @@ class StationScoutFrame(wx.Frame):
         self.timer_fired_today: set[tuple[str, str, str]] = set()
         self.notifier = create_notifier(parent=self)
         self.track_session: TrackSessionLog | None = None
+        self.lastfm_sent_tracks: set[str] = set()
         self.metadata_stop_event = threading.Event()
         self.track_stop_at = ""
         self.track_reader = IcyMetadataReader()
@@ -581,8 +610,10 @@ class StationScoutFrame(wx.Frame):
         line = entry.display_line()
         self._set_playback_title(line)
         self.now_playing.SetLabel(f"{line}\n{self.current_station.name}")
-        if self.track_session and self.track_session.add(entry):
+        if should_scrobble_lastfm(self.state, entry, self.lastfm_sent_tracks):
             self._send_lastfm(entry)
+            self.lastfm_sent_tracks.add(lastfm_track_key(entry))
+        if self.track_session and self.track_session.add(entry):
             self._set_status(f"Tracked: {line}")
 
     def _on_start_tracking(self, _event: wx.Event) -> None:
@@ -692,6 +723,7 @@ class StationScoutFrame(wx.Frame):
         self.state.lastfm_session_key = session_key
         self.state.lastfm_username = username
         self.state.lastfm_enabled = True
+        self.state.lastfm_scrobble_enabled = True
         self.state.lastfm_pending_token = ""
         self.store.save(self.state)
         self.lastfm_client = self._create_lastfm_client()
@@ -839,12 +871,14 @@ class SettingsDialog(wx.Dialog):
 
         lastfm_box = wx.StaticBoxSizer(wx.VERTICAL, self, "Last.fm")
         self.lastfm_status = wx.StaticText(self)
+        self.lastfm_scrobble_checkbox = wx.CheckBox(self, label="Scrobble played songs to Last.fm")
         lastfm_buttons = wx.BoxSizer(wx.HORIZONTAL)
         self.connect_lastfm_button = wx.Button(self, label="Connect Last.fm")
         self.finish_lastfm_button = wx.Button(self, label="Finish Last.fm")
         lastfm_buttons.Add(self.connect_lastfm_button, 0, wx.RIGHT, 8)
         lastfm_buttons.Add(self.finish_lastfm_button, 0)
         lastfm_box.Add(self.lastfm_status, 0, wx.EXPAND | wx.ALL, 12)
+        lastfm_box.Add(self.lastfm_scrobble_checkbox, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         lastfm_box.Add(lastfm_buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
         spotify_box = wx.StaticBoxSizer(wx.VERTICAL, self, "Spotify")
@@ -864,6 +898,7 @@ class SettingsDialog(wx.Dialog):
         self.Bind(wx.EVT_BUTTON, self._on_connect_lastfm, self.connect_lastfm_button)
         self.Bind(wx.EVT_BUTTON, self._on_finish_lastfm, self.finish_lastfm_button)
         self.Bind(wx.EVT_BUTTON, self._on_connect_spotify, self.connect_spotify_button)
+        self.Bind(wx.EVT_CHECKBOX, self._on_toggle_lastfm_scrobbling, self.lastfm_scrobble_checkbox)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
         self._refresh()
         self.log_folder_button.SetFocus()
@@ -871,13 +906,18 @@ class SettingsDialog(wx.Dialog):
     def _refresh(self) -> None:
         state = self.parent_frame.state
         self.log_folder_value.SetValue(str(self.parent_frame.store.track_log_folder(state)))
-        if state.lastfm_enabled:
-            self.lastfm_status.SetLabel(f"Connected as {state.lastfm_username or 'your account'}.")
-        elif state.lastfm_pending_token:
-            self.lastfm_status.SetLabel("Waiting for browser approval. Choose Finish Last.fm afterward.")
+        lastfm_status, connect_label, show_finish = lastfm_settings_view_state(state)
+        self.lastfm_status.SetLabel(lastfm_status)
+        self.connect_lastfm_button.SetLabel(connect_label)
+        if show_finish:
+            self.finish_lastfm_button.Show()
         else:
-            self.lastfm_status.SetLabel("Not connected.")
+            self.finish_lastfm_button.Hide()
+        self.lastfm_scrobble_checkbox.SetValue(state.lastfm_scrobble_enabled)
+        self.lastfm_scrobble_checkbox.Enable(state.lastfm_enabled)
         self.spotify_status.SetLabel("Connected." if state.spotify_enabled else "Not connected.")
+        self.Layout()
+        self.Fit()
 
     def _on_choose_log_folder(self, _event: wx.Event) -> None:
         self.parent_frame._on_choose_log_folder(_event)
@@ -890,6 +930,12 @@ class SettingsDialog(wx.Dialog):
     def _on_finish_lastfm(self, _event: wx.Event) -> None:
         self.parent_frame._on_finish_lastfm(_event)
         self._refresh()
+
+    def _on_toggle_lastfm_scrobbling(self, _event: wx.Event) -> None:
+        self.parent_frame.state.lastfm_scrobble_enabled = self.lastfm_scrobble_checkbox.GetValue()
+        self.parent_frame.store.save(self.parent_frame.state)
+        status = "enabled" if self.parent_frame.state.lastfm_scrobble_enabled else "disabled"
+        self.parent_frame._set_status(f"Last.fm scrobbling {status}.")
 
     def _on_connect_spotify(self, _event: wx.Event) -> None:
         self.parent_frame._on_connect_spotify(_event)

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-09T13:52:58.497Z",
-  "updatedAt": "2026-05-09T13:53:02.629Z",
+  "updatedAt": "2026-05-09T13:59:44.650Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -11,13 +11,14 @@
       "id": "G001-create-station-scout-v1-as-a-private",
       "title": "Create Station Scout V1 as a private GitHub repo under C:\\Users\\joshu...",
       "objective": "Create Station Scout V1 as a private GitHub repo under C:\\Users\\joshu\\gh-projects. Station Scout is a desktop Radio Browser explorer with player, tray support, notifications, and per-station tune-in timers. Implement a small but working V1, verify locally, and commit meaningful milestones before pushing to a private Orinks/station-scout repository.",
-      "status": "in_progress",
+      "status": "complete",
       "attempt": 1,
       "createdAt": "2026-05-09T13:52:58.497Z",
-      "updatedAt": "2026-05-09T13:53:02.629Z",
-      "startedAt": "2026-05-09T13:53:02.629Z"
+      "updatedAt": "2026-05-09T13:59:44.650Z",
+      "startedAt": "2026-05-09T13:53:02.629Z",
+      "completedAt": "2026-05-09T13:59:44.650Z",
+      "evidence": "Created private GitHub repo https://github.com/Orinks/station-scout; pushed milestone commits a4b5d4b,d99537a,6cc81c3,cd493c5; local pytest 7 passed; Ruff passed; editable install passed; GitHub CI run 25602903674 passed."
     }
   ],
-  "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-create-station-scout-v1-as-a-private Create Station Scout V1 as a private GitHub repo under C:\\Users\\joshu...",
-  "activeGoalId": "G001-create-station-scout-v1-as-a-private"
+  "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-create-station-scout-v1-as-a-private Create Station Scout V1 as a private GitHub repo under C:\\Users\\joshu..."
 }

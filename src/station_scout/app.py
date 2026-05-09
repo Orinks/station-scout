@@ -30,6 +30,13 @@ def _describe_control(control: wx.Window, label: str) -> None:
     control.SetHelpText(label)
 
 
+def playback_window_title(now_playing: str = "") -> str:
+    now_playing = " ".join(now_playing.split())
+    if not now_playing:
+        return APP_TITLE
+    return f"{now_playing} - {APP_TITLE}"
+
+
 class StationScoutFrame(wx.Frame):
     def __init__(self) -> None:
         super().__init__(None, title=APP_TITLE, size=(980, 680))
@@ -338,6 +345,7 @@ class StationScoutFrame(wx.Frame):
         self.store.save(self.state)
         self._refresh_saved_lists()
         self.now_playing.SetLabel(f"{station.name}\n{station.subtitle()}\n{station.quality_label()}")
+        self._set_playback_title(station.name)
         self._set_status(f"Loading {station.name}...")
         self._notify("Station Scout", f"Tuning in to {station.name}")
         if station.source == "Radio Browser":
@@ -377,15 +385,18 @@ class StationScoutFrame(wx.Frame):
     def _on_player_stopped(self) -> None:
         self._set_status("Stopped.")
         self.pause_button.SetLabel("Pause")
+        self._set_playback_title()
 
     def _on_player_error(self, message: str) -> None:
         self.pause_button.SetLabel("Pause")
+        self._set_playback_title()
         self._show_error(RadioBrowserError(message))
 
     def stop_playback(self) -> None:
         self.player.stop()
         self._set_status("Stopped.")
         self.pause_button.SetLabel("Pause")
+        self._set_playback_title()
 
     def toggle_pause(self) -> None:
         if not self.current_station:
@@ -527,6 +538,9 @@ class StationScoutFrame(wx.Frame):
     def _set_status(self, text: str) -> None:
         self.SetStatusText(text)
 
+    def _set_playback_title(self, now_playing: str = "") -> None:
+        self.SetTitle(playback_window_title(now_playing))
+
     def _on_start_tracking(self, _event: wx.Event) -> None:
         station = self.current_station or self._selected_station()
         if not station:
@@ -557,6 +571,7 @@ class StationScoutFrame(wx.Frame):
                     if entry and self.track_session and self.track_session.add(entry):
                         self._send_lastfm(entry)
                         wx.CallAfter(self._set_status, f"Tracked: {entry.display_line()}")
+                        wx.CallAfter(self._set_playback_title, entry.display_line())
             except BaseException as exc:
                 wx.CallAfter(self._set_status, f"Tracking stopped: {exc}")
             finally:

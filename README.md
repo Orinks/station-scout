@@ -5,6 +5,7 @@ Station Scout is a desktop internet radio explorer built around the public Radio
 V1 focuses on:
 
 - Searching working stations by name, country, language, and tag
+- Opening StreamURL.link searches by station name or call letters, then playing copied direct stream URLs
 - Playing streams with wxPython media controls
 - Favorite stations and recent station history
 - System tray controls for play, stop, show, and quit

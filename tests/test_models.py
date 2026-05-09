@@ -23,3 +23,10 @@ def test_timer_round_trips_json() -> None:
 
     assert TuneTimer.from_json(timer.to_json()) == timer
 
+
+def test_direct_stream_station_has_stable_id_and_source() -> None:
+    station = Station.direct_stream(name="Example", url="https://stream.test/live")
+
+    assert station.stationuuid.startswith("direct-")
+    assert station.source == "StreamURL.link"
+    assert "StreamURL.link" in station.quality_label()

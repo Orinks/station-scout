@@ -9,6 +9,7 @@ import wx
 import wx.adv
 import wx.media
 
+from station_scout.direct_streams import station_from_direct_url, streamurl_search_url
 from station_scout.models import Station, TuneTimer
 from station_scout.notifications import create_notifier
 from station_scout.radio_browser import RadioBrowserClient, RadioBrowserError
@@ -45,26 +46,42 @@ class StationScoutFrame(wx.Frame):
         root = wx.BoxSizer(wx.VERTICAL)
 
         search_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Search stations")
+        source_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.search_source = wx.Choice(
+            panel,
+            choices=["Radio Browser", "Direct stream URL search"],
+            name="Search source",
+        )
+        self.search_source.SetSelection(0)
+        source_row.Add(wx.StaticText(panel, label="Source"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        source_row.Add(self.search_source, 0)
+        search_box.Add(source_row, 0, wx.EXPAND | wx.ALL, 8)
+
         form = wx.FlexGridSizer(2, 4, 6, 8)
         form.AddGrowableCol(1)
         form.AddGrowableCol(3)
 
-        self.name_input = wx.TextCtrl(panel, name="Station name")
+        self.name_input = wx.TextCtrl(panel, name="Station name or call letters")
         self.country_input = wx.TextCtrl(panel, name="Country")
         self.language_input = wx.TextCtrl(panel, name="Language")
         self.tag_input = wx.TextCtrl(panel, name="Tag")
+        self.name_label = wx.StaticText(panel, label="Name")
+        self.country_label = wx.StaticText(panel, label="Country")
+        self.language_label = wx.StaticText(panel, label="Language")
+        self.tag_label = wx.StaticText(panel, label="Tag")
         for label, control in (
-            ("Name", self.name_input),
-            ("Country", self.country_input),
-            ("Language", self.language_input),
-            ("Tag", self.tag_input),
+            (self.name_label, self.name_input),
+            (self.country_label, self.country_input),
+            (self.language_label, self.language_input),
+            (self.tag_label, self.tag_input),
         ):
-            form.Add(wx.StaticText(panel, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+            form.Add(label, 0, wx.ALIGN_CENTER_VERTICAL)
             form.Add(control, 1, wx.EXPAND)
         search_box.Add(form, 0, wx.EXPAND | wx.ALL, 8)
 
         buttons = wx.BoxSizer(wx.HORIZONTAL)
         self.search_button = wx.Button(panel, label="Search")
+        self.open_direct_search_button = wx.Button(panel, label="Open direct URL search")
         self.play_button = wx.Button(panel, label="Play selected")
         self.stop_button = wx.Button(panel, label="Stop")
         self.favorite_button = wx.Button(panel, label="Add favorite")
@@ -72,6 +89,7 @@ class StationScoutFrame(wx.Frame):
         self.timer_button = wx.Button(panel, label="Add tune-in timer")
         for button in (
             self.search_button,
+            self.open_direct_search_button,
             self.play_button,
             self.stop_button,
             self.favorite_button,
@@ -86,7 +104,8 @@ class StationScoutFrame(wx.Frame):
         self.station_list.AppendColumn("Station", width=240)
         self.station_list.AppendColumn("Location", width=180)
         self.station_list.AppendColumn("Language", width=150)
-        self.station_list.AppendColumn("Quality", width=220)
+        self.station_list.AppendColumn("Quality", width=170)
+        self.station_list.AppendColumn("Source", width=140)
 
         side = wx.BoxSizer(wx.VERTICAL)
         self.now_playing = wx.StaticText(panel, label="Nothing playing")
@@ -116,11 +135,13 @@ class StationScoutFrame(wx.Frame):
 
     def _bind_events(self) -> None:
         self.Bind(wx.EVT_BUTTON, self._on_search, self.search_button)
+        self.Bind(wx.EVT_BUTTON, self._on_open_direct_search, self.open_direct_search_button)
         self.Bind(wx.EVT_BUTTON, self._on_play_selected, self.play_button)
         self.Bind(wx.EVT_BUTTON, lambda _event: self.stop_playback(), self.stop_button)
         self.Bind(wx.EVT_BUTTON, self._on_add_favorite, self.favorite_button)
         self.Bind(wx.EVT_BUTTON, self._on_open_website, self.website_button)
         self.Bind(wx.EVT_BUTTON, self._on_add_timer, self.timer_button)
+        self.Bind(wx.EVT_CHOICE, self._on_search_source_changed, self.search_source)
         self.station_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play_selected)
         self.favorites_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("favorites"))
         self.recents_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("recents"))
@@ -150,18 +171,31 @@ class StationScoutFrame(wx.Frame):
         event.Skip()
 
     def _on_search(self, _event: wx.Event) -> None:
-        self._set_status("Searching Radio Browser...")
+        source = self.search_source.GetStringSelection()
+        self._set_status(f"Searching {source}...")
         self.search_button.Disable()
-        self._run_background(
-            lambda: self.client.search(
-                name=self.name_input.GetValue().strip(),
-                country=self.country_input.GetValue().strip(),
-                language=self.language_input.GetValue().strip(),
-                tag=self.tag_input.GetValue().strip(),
-            ),
-            self._show_results,
-            self._show_error,
-        )
+        if source == "Direct stream URL search":
+            try:
+                station = station_from_direct_url(
+                    name=self.name_input.GetValue().strip(),
+                    url=self.tag_input.GetValue().strip(),
+                    homepage=self.country_input.GetValue().strip(),
+                )
+            except ValueError as exc:
+                self._show_error(exc)
+            else:
+                self._show_results([station])
+        else:
+            self._run_background(
+                lambda: self.client.search(
+                    name=self.name_input.GetValue().strip(),
+                    country=self.country_input.GetValue().strip(),
+                    language=self.language_input.GetValue().strip(),
+                    tag=self.tag_input.GetValue().strip(),
+                ),
+                self._show_results,
+                self._show_error,
+            )
 
     def _show_results(self, stations: list[Station]) -> None:
         self.search_button.Enable()
@@ -172,7 +206,34 @@ class StationScoutFrame(wx.Frame):
             self.station_list.SetItem(index, 1, station.country or station.countrycode)
             self.station_list.SetItem(index, 2, station.language)
             self.station_list.SetItem(index, 3, station.quality_label())
+            self.station_list.SetItem(index, 4, station.source)
         self._set_status(f"{len(stations)} stations found.")
+
+    def _on_search_source_changed(self, _event: wx.Event) -> None:
+        direct_mode = self.search_source.GetStringSelection() == "Direct stream URL search"
+        self.language_input.Enable(not direct_mode)
+        if direct_mode:
+            self.name_label.SetLabel("Name or call letters")
+            self.country_label.SetLabel("Website")
+            self.language_label.SetLabel("Language")
+            self.tag_label.SetLabel("Direct stream URL")
+            self._set_status(
+                "Open direct URL search, copy the stream URL, then paste it into Direct stream URL."
+            )
+        else:
+            self.name_label.SetLabel("Name")
+            self.country_label.SetLabel("Country")
+            self.language_label.SetLabel("Language")
+            self.tag_label.SetLabel("Tag")
+            self._set_status("Radio Browser search is ready.")
+
+    def _on_open_direct_search(self, _event: wx.Event) -> None:
+        query = self.name_input.GetValue().strip()
+        if not query:
+            self._set_status("Enter a station name or call letters first.")
+            return
+        webbrowser.open(streamurl_search_url(query))
+        self._set_status("Opened StreamURL.link search in your browser.")
 
     def _on_play_selected(self, _event: wx.Event) -> None:
         station = self._selected_station()
@@ -190,7 +251,14 @@ class StationScoutFrame(wx.Frame):
         self.now_playing.SetLabel(f"{station.name}\n{station.subtitle()}\n{station.quality_label()}")
         self._set_status(f"Loading {station.name}...")
         self._notify("Station Scout", f"Tuning in to {station.name}")
-        self._run_background(lambda: self.client.click_url(station.stationuuid), self._play_url, self._show_error)
+        if station.source == "Radio Browser":
+            self._run_background(
+                lambda: self.client.click_url(station.stationuuid),
+                self._play_url,
+                self._show_error,
+            )
+        else:
+            self._play_url(station.url_resolved)
 
     def _play_url(self, url: str) -> None:
         if not url:
@@ -303,6 +371,7 @@ class StationScoutFrame(wx.Frame):
         self.search_button.Enable()
         self._set_status(str(exc))
         self._notify("Station Scout error", str(exc))
+
 
     def _notify(self, title: str, message: str) -> None:
         self.notifier.notify(title, message)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +23,7 @@ class Station:
     votes: int = 0
     clickcount: int = 0
     clicktrend: int = 0
+    source: str = "Radio Browser"
 
     @classmethod
     def from_api(cls, payload: dict[str, object]) -> "Station":
@@ -43,6 +45,26 @@ class Station:
             votes=_int(payload.get("votes")),
             clickcount=_int(payload.get("clickcount")),
             clicktrend=_int(payload.get("clicktrend")),
+            source=str(payload.get("source") or "Radio Browser"),
+        )
+
+    @classmethod
+    def direct_stream(
+        cls,
+        *,
+        name: str,
+        url: str,
+        homepage: str = "",
+        source: str = "StreamURL.link",
+    ) -> "Station":
+        digest = sha256(f"{source}\0{name}\0{url}".encode("utf-8")).hexdigest()[:24]
+        return cls(
+            stationuuid=f"direct-{digest}",
+            name=name,
+            url_resolved=url,
+            homepage=homepage,
+            source=source,
+            lastcheckok=1,
         )
 
     def subtitle(self) -> str:
@@ -59,6 +81,8 @@ class Station:
             bits.append(f"{self.bitrate} kbps")
         if self.hls:
             bits.append("HLS")
+        if self.source != "Radio Browser":
+            bits.append(self.source)
         return ", ".join(bits) or "stream details unavailable"
 
     def to_json(self) -> dict[str, object]:
@@ -80,6 +104,7 @@ class Station:
             "votes": self.votes,
             "clickcount": self.clickcount,
             "clicktrend": self.clicktrend,
+            "source": self.source,
         }
 
 
@@ -116,4 +141,3 @@ def _int(value: object) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
-

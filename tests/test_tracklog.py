@@ -73,3 +73,42 @@ def test_session_deduplicates_repeated_metadata(tmp_path) -> None:
     assert session.add(entry)
     assert not session.add(entry)
     assert session.path.read_text(encoding="utf-8").count("Kate Bush") == 1
+
+
+def test_session_records_station_change_without_losing_tracks(tmp_path) -> None:
+    first_station = Station(stationuuid="abc", name="Transmission FM", url_resolved="https://one.test")
+    second_station = Station(stationuuid="def", name="Evening Radio", url_resolved="https://two.test")
+    session = TrackSessionLog(root=tmp_path, station=first_station)
+
+    session.add(TrackEntry("Kate Bush", "Running Up That Hill", "raw", dt.datetime.now()))
+    session.add(
+        TrackEntry("Zara Larsson", "Midnight Sun", "raw", dt.datetime.now()),
+        station=second_station,
+    )
+
+    assert session.entries == [
+        TrackEntry("Kate Bush", "Running Up That Hill", "raw", session.entries[0].timestamp),
+        TrackEntry("Zara Larsson", "Midnight Sun", "raw", session.entries[1].timestamp),
+    ]
+    assert session.path.read_text(encoding="utf-8") == (
+        "Kate Bush - Running Up That Hill\n\n"
+        "== Station: Evening Radio ==\n"
+        "Zara Larsson - Midnight Sun\n"
+    )
+
+
+def test_session_deduplicates_tracks_per_station(tmp_path) -> None:
+    first_station = Station(stationuuid="abc", name="Transmission FM", url_resolved="https://one.test")
+    second_station = Station(stationuuid="def", name="Evening Radio", url_resolved="https://two.test")
+    session = TrackSessionLog(root=tmp_path, station=first_station)
+    entry = TrackEntry("Kate Bush", "Running Up That Hill", "raw", dt.datetime.now())
+
+    assert session.add(entry)
+    assert not session.add(entry)
+    assert session.add(entry, station=second_station)
+
+    assert session.path.read_text(encoding="utf-8") == (
+        "Kate Bush - Running Up That Hill\n\n"
+        "== Station: Evening Radio ==\n"
+        "Kate Bush - Running Up That Hill\n"
+    )

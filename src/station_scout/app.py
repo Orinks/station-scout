@@ -392,6 +392,9 @@ class StationScoutFrame(wx.Frame):
         if not station.url_resolved:
             self._show_error(RadioBrowserError("Selected station does not have a stream URL."))
             return
+        if self.track_session and self.current_station and self.current_station.stationuuid != station.stationuuid:
+            if self.track_session.add_station(station):
+                self._set_status(f"Tracking continued on {station.name}.")
         self.current_station = station
         self.state.recents = add_unique_station(self.state.recents, station, limit=20)
         self.store.save(self.state)
@@ -636,7 +639,7 @@ class StationScoutFrame(wx.Frame):
         if should_scrobble_lastfm(self.state, entry, self.lastfm_sent_tracks):
             self._send_lastfm(entry)
             self.lastfm_sent_tracks.add(lastfm_track_key(entry))
-        if self.track_session and self.track_session.add(entry):
+        if self.track_session and self.track_session.add(entry, station=self.current_station):
             self._set_status(f"Tracked: {line}")
 
     def _on_start_tracking(self, _event: wx.Event) -> None:

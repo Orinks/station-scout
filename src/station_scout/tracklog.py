@@ -88,9 +88,21 @@ class TrackSessionLog:
         self.path = root / f"{_slug(self.show_name or station.name)}-{self.started_at:%Y-%m-%d-%H%M}.txt"
         self.entries: list[TrackEntry] = []
         self._seen: set[str] = set()
+        self._current_stationuuid = station.stationuuid
 
-    def add(self, entry: TrackEntry) -> bool:
-        key = entry.display_line().lower()
+    def add_station(self, station: Station) -> bool:
+        if station.stationuuid == self._current_stationuuid:
+            return False
+        self._current_stationuuid = station.stationuuid
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as file:
+            file.write(f"\n== Station: {station.name} ==\n")
+        return True
+
+    def add(self, entry: TrackEntry, *, station: Station | None = None) -> bool:
+        if station:
+            self.add_station(station)
+        key = f"{self._current_stationuuid}\0{entry.display_line()}".lower()
         if key in self._seen:
             return False
         self._seen.add(key)

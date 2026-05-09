@@ -73,3 +73,31 @@ def test_stop_frees_active_stream() -> None:
     stream.stop.assert_called_once()
     stream.free.assert_called_once()
     assert radio._stream is None
+
+
+def test_toggle_pause_pauses_and_resumes_stream() -> None:
+    stream = MagicMock()
+    stream.is_paused = False
+    stream.pause.return_value = True
+    stream.play.return_value = True
+    radio = RadioPlayer()
+    radio._stream = stream
+
+    assert radio.toggle_pause() is True
+    stream.pause.assert_called_once_with()
+
+    stream.is_paused = True
+    assert radio.toggle_pause() is True
+    stream.play.assert_called_once_with()
+
+
+def test_change_volume_clamps_and_updates_active_stream() -> None:
+    stream = MagicMock()
+    radio = RadioPlayer()
+    radio._stream = stream
+
+    assert radio.change_volume(-2.0) == 0.0
+    assert stream.volume == 0.0
+
+    assert radio.change_volume(1.5) == 1.0
+    assert stream.volume == 1.0

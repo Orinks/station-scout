@@ -67,7 +67,10 @@ class StationScoutFrame(wx.Frame):
     def _build_menu(self) -> None:
         self.ID_FOCUS_SEARCH = wx.NewIdRef()
         self.ID_PLAY_SELECTED = wx.NewIdRef()
+        self.ID_TOGGLE_PAUSE = wx.NewIdRef()
         self.ID_STOP_PLAYBACK = wx.NewIdRef()
+        self.ID_VOLUME_UP = wx.NewIdRef()
+        self.ID_VOLUME_DOWN = wx.NewIdRef()
         self.ID_ADD_TIMER = wx.NewIdRef()
         self.ID_SETTINGS = wx.NewIdRef()
         self.ID_START_TRACKING = wx.NewIdRef()
@@ -83,7 +86,10 @@ class StationScoutFrame(wx.Frame):
         playback_menu = wx.Menu()
         playback_menu.Append(self.ID_FOCUS_SEARCH, "Focus search\tCtrl+F")
         playback_menu.Append(self.ID_PLAY_SELECTED, "Play selected\tCtrl+P")
+        playback_menu.Append(self.ID_TOGGLE_PAUSE, "Play/Pause\tCtrl+Space")
         playback_menu.Append(self.ID_STOP_PLAYBACK, "Stop\tCtrl+S")
+        playback_menu.Append(self.ID_VOLUME_UP, "Volume up\tCtrl+Up")
+        playback_menu.Append(self.ID_VOLUME_DOWN, "Volume down\tCtrl+Down")
         playback_menu.AppendSeparator()
         playback_menu.Append(self.ID_ADD_TIMER, "Add tune-in timer\tCtrl+T")
         playback_menu.Append(self.ID_START_TRACKING, "Start tracking\tCtrl+Shift+T")
@@ -129,6 +135,7 @@ class StationScoutFrame(wx.Frame):
 
         actions_box = wx.StaticBoxSizer(wx.HORIZONTAL, panel, "Station actions")
         self.play_button = wx.Button(panel, label="Play selected")
+        self.pause_button = wx.Button(panel, label="Pause")
         self.stop_button = wx.Button(panel, label="Stop")
         self.favorite_button = wx.Button(panel, label="Add favorite")
         self.website_button = wx.Button(panel, label="Open website")
@@ -137,6 +144,7 @@ class StationScoutFrame(wx.Frame):
         self.stop_tracking_button = wx.Button(panel, label="Stop tracking")
         for button in (
             self.play_button,
+            self.pause_button,
             self.stop_button,
             self.favorite_button,
             self.website_button,
@@ -195,13 +203,17 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _event: self.Close(), id=wx.ID_EXIT)
         self.Bind(wx.EVT_MENU, self._on_focus_search, id=self.ID_FOCUS_SEARCH)
         self.Bind(wx.EVT_MENU, self._on_play_selected, id=self.ID_PLAY_SELECTED)
+        self.Bind(wx.EVT_MENU, lambda _event: self.toggle_pause(), id=self.ID_TOGGLE_PAUSE)
         self.Bind(wx.EVT_MENU, lambda _event: self.stop_playback(), id=self.ID_STOP_PLAYBACK)
+        self.Bind(wx.EVT_MENU, lambda _event: self.adjust_volume(0.1), id=self.ID_VOLUME_UP)
+        self.Bind(wx.EVT_MENU, lambda _event: self.adjust_volume(-0.1), id=self.ID_VOLUME_DOWN)
         self.Bind(wx.EVT_MENU, self._on_add_timer, id=self.ID_ADD_TIMER)
         self.Bind(wx.EVT_MENU, self._on_start_tracking, id=self.ID_START_TRACKING)
         self.Bind(wx.EVT_MENU, lambda _event: self.stop_tracking(), id=self.ID_STOP_TRACKING)
         self.Bind(wx.EVT_BUTTON, self._on_search, self.search_button)
         self.Bind(wx.EVT_BUTTON, self._on_direct_stream_fallback, self.direct_stream_button)
         self.Bind(wx.EVT_BUTTON, self._on_play_selected, self.play_button)
+        self.Bind(wx.EVT_BUTTON, lambda _event: self.toggle_pause(), self.pause_button)
         self.Bind(wx.EVT_BUTTON, lambda _event: self.stop_playback(), self.stop_button)
         self.Bind(wx.EVT_BUTTON, self._on_add_favorite, self.favorite_button)
         self.Bind(wx.EVT_BUTTON, self._on_open_website, self.website_button)
@@ -220,7 +232,10 @@ class StationScoutFrame(wx.Frame):
                 [
                     (wx.ACCEL_CTRL, ord("F"), self.ID_FOCUS_SEARCH),
                     (wx.ACCEL_CTRL, ord("P"), self.ID_PLAY_SELECTED),
+                    (wx.ACCEL_CTRL, wx.WXK_SPACE, self.ID_TOGGLE_PAUSE),
                     (wx.ACCEL_CTRL, ord("S"), self.ID_STOP_PLAYBACK),
+                    (wx.ACCEL_CTRL, wx.WXK_UP, self.ID_VOLUME_UP),
+                    (wx.ACCEL_CTRL, wx.WXK_DOWN, self.ID_VOLUME_DOWN),
                     (wx.ACCEL_CTRL, ord("T"), self.ID_ADD_TIMER),
                     (wx.ACCEL_CTRL, ord(","), self.ID_SETTINGS),
                     (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("T"), self.ID_START_TRACKING),
@@ -242,10 +257,12 @@ class StationScoutFrame(wx.Frame):
         stop_id = wx.NewIdRef()
         quit_id = wx.NewIdRef()
         menu.Append(show_id, "Show Station Scout")
+        menu.Append(self.ID_TOGGLE_PAUSE, "Play/Pause")
         menu.Append(stop_id, "Stop playback")
         menu.AppendSeparator()
         menu.Append(quit_id, "Quit")
         self.tray.Bind(wx.EVT_MENU, lambda _event: self._show_from_tray(), id=show_id)
+        self.tray.Bind(wx.EVT_MENU, lambda _event: self.toggle_pause(), id=self.ID_TOGGLE_PAUSE)
         self.tray.Bind(wx.EVT_MENU, lambda _event: self.stop_playback(), id=stop_id)
         self.tray.Bind(wx.EVT_MENU, lambda _event: self.Close(), id=quit_id)
         self.tray.PopupMenu(menu)
@@ -324,11 +341,8 @@ class StationScoutFrame(wx.Frame):
         self._set_status(f"Loading {station.name}...")
         self._notify("Station Scout", f"Tuning in to {station.name}")
         if station.source == "Radio Browser":
-            self._run_background(
-                lambda: self.client.click_url(station.stationuuid),
-                self._play_url,
-                self._show_error,
-            )
+            self._play_url(station.url_resolved)
+            self._record_radio_browser_click(station)
         else:
             self._play_url(station.url_resolved)
 
@@ -340,18 +354,60 @@ class StationScoutFrame(wx.Frame):
             self.current_station = Station.from_api({**self.current_station.to_json(), "url_resolved": url})
         self.player.play(url)
 
+    def _record_radio_browser_click(self, station: Station) -> None:
+        def worker() -> None:
+            try:
+                url = self.client.click_url(station.stationuuid)
+            except RadioBrowserError as exc:
+                wx.CallAfter(self._set_status, f"Playing; Radio Browser click report failed: {exc}")
+                return
+            if url:
+                wx.CallAfter(self._update_current_station_url, station.stationuuid, url)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_current_station_url(self, stationuuid: str, url: str) -> None:
+        if self.current_station and self.current_station.stationuuid == stationuuid:
+            self.current_station = Station.from_api({**self.current_station.to_json(), "url_resolved": url})
+
     def _on_player_started(self) -> None:
         self._set_status(f"Playing {self.current_station.name if self.current_station else 'stream'}.")
+        self.pause_button.SetLabel("Pause")
 
     def _on_player_stopped(self) -> None:
         self._set_status("Stopped.")
+        self.pause_button.SetLabel("Pause")
 
     def _on_player_error(self, message: str) -> None:
+        self.pause_button.SetLabel("Pause")
         self._show_error(RadioBrowserError(message))
 
     def stop_playback(self) -> None:
         self.player.stop()
         self._set_status("Stopped.")
+        self.pause_button.SetLabel("Pause")
+
+    def toggle_pause(self) -> None:
+        if not self.current_station:
+            station = self._selected_station()
+            if station:
+                self.play_station(station)
+            else:
+                self._set_status("Choose a station first.")
+            return
+        if self.player.toggle_pause():
+            if self.player.is_paused():
+                self.pause_button.SetLabel("Resume")
+                self._set_status("Paused.")
+            else:
+                self.pause_button.SetLabel("Pause")
+                self._set_status(f"Playing {self.current_station.name}.")
+        else:
+            self.play_station(self.current_station)
+
+    def adjust_volume(self, delta: float) -> None:
+        level = self.player.change_volume(delta)
+        self._set_status(f"Volume {round(level * 100)} percent.")
 
     def _on_add_favorite(self, _event: wx.Event) -> None:
         station = self._selected_station() or self.current_station

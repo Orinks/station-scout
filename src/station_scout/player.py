@@ -59,6 +59,29 @@ class RadioPlayer:
             self._on_playing()
         return True
 
+    def pause(self) -> bool:
+        if self._stream is None:
+            return False
+        try:
+            return bool(self._stream.pause())
+        except Exception as exc:
+            return self._fail(f"Failed to pause stream: {exc}")
+
+    def resume(self) -> bool:
+        if self._stream is None:
+            return False
+        try:
+            return bool(self._stream.play())
+        except Exception as exc:
+            return self._fail(f"Failed to resume stream: {exc}")
+
+    def toggle_pause(self) -> bool:
+        if self._stream is None:
+            return False
+        if self.is_paused():
+            return self.resume()
+        return self.pause()
+
     def stop(self, *, notify: bool = True) -> None:
         was_playing = self.is_playing()
         if self._stream is not None:
@@ -80,6 +103,10 @@ class RadioPlayer:
             except Exception as exc:
                 logger.debug("Error setting stream volume: %s", exc)
 
+    def change_volume(self, delta: float) -> float:
+        self.set_volume(self._volume + delta)
+        return self._volume
+
     def get_volume(self) -> float:
         return self._volume
 
@@ -88,6 +115,14 @@ class RadioPlayer:
             return False
         try:
             return bool(self._stream.is_playing)
+        except Exception:
+            return False
+
+    def is_paused(self) -> bool:
+        if self._stream is None:
+            return False
+        try:
+            return bool(self._stream.is_paused)
         except Exception:
             return False
 

@@ -11,6 +11,21 @@ V1 focuses on:
 - System tray controls for play, stop, show, and quit
 - Desktop notifications
 - Per-station tune-in timers
+- Manual and timer-driven playlist tracking from stream metadata
+
+## Playlist Tracking
+
+Station Scout can track the metadata a station publishes while you listen. Manual tracking and
+timer-driven show tracking write plain text session files under the app settings folder. Show logs
+use one line per song in this format:
+
+```text
+Artist - Title
+```
+
+Station names are intentionally kept out of show logs so the files are easy to read and search.
+Metadata that does not look like a clear artist/title pair is still kept, but marked with `?` so it
+can be reviewed later.
 
 ## Notifications
 

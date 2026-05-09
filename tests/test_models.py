@@ -19,7 +19,14 @@ def test_station_normalizes_api_payload() -> None:
 
 
 def test_timer_round_trips_json() -> None:
-    timer = TuneTimer(stationuuid="abc", station_name="Example", time="07:30")
+    timer = TuneTimer(
+        stationuuid="abc",
+        station_name="Example",
+        time="07:30",
+        end_time="10:30",
+        show_name="Morning Show",
+        track_playlist=True,
+    )
 
     assert TuneTimer.from_json(timer.to_json()) == timer
 

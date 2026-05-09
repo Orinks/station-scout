@@ -15,6 +15,7 @@ from station_scout.notifications import create_notifier
 from station_scout.radio_browser import RadioBrowserClient, RadioBrowserError
 from station_scout.schedule import due_timers
 from station_scout.storage import SettingsStore, add_unique_station
+from station_scout.tracklog import IcyMetadataReader, TrackSessionLog, parse_stream_title
 
 
 APP_TITLE = "Station Scout"
@@ -30,6 +31,9 @@ class StationScoutFrame(wx.Frame):
         self.current_station: Station | None = None
         self.timer_fired_today: set[tuple[str, str, str]] = set()
         self.notifier = create_notifier(parent=self)
+        self.track_session: TrackSessionLog | None = None
+        self.track_stop_event = threading.Event()
+        self.track_reader = IcyMetadataReader()
 
         self._build_controls()
         self._bind_events()
@@ -87,6 +91,8 @@ class StationScoutFrame(wx.Frame):
         self.favorite_button = wx.Button(panel, label="Add favorite")
         self.website_button = wx.Button(panel, label="Open website")
         self.timer_button = wx.Button(panel, label="Add tune-in timer")
+        self.start_tracking_button = wx.Button(panel, label="Start tracking")
+        self.stop_tracking_button = wx.Button(panel, label="Stop tracking")
         for button in (
             self.search_button,
             self.open_direct_search_button,
@@ -95,6 +101,8 @@ class StationScoutFrame(wx.Frame):
             self.favorite_button,
             self.website_button,
             self.timer_button,
+            self.start_tracking_button,
+            self.stop_tracking_button,
         ):
             buttons.Add(button, 0, wx.RIGHT, 8)
         search_box.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
@@ -141,6 +149,8 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self._on_add_favorite, self.favorite_button)
         self.Bind(wx.EVT_BUTTON, self._on_open_website, self.website_button)
         self.Bind(wx.EVT_BUTTON, self._on_add_timer, self.timer_button)
+        self.Bind(wx.EVT_BUTTON, self._on_start_tracking, self.start_tracking_button)
+        self.Bind(wx.EVT_BUTTON, lambda _event: self.stop_tracking(), self.stop_tracking_button)
         self.Bind(wx.EVT_CHOICE, self._on_search_source_changed, self.search_source)
         self.station_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play_selected)
         self.favorites_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("favorites"))
@@ -266,6 +276,8 @@ class StationScoutFrame(wx.Frame):
             return
         if self.media.Load(url):
             self.media.Play()
+            if self.current_station:
+                self.current_station = Station.from_api({**self.current_station.to_json(), "url_resolved": url})
             self._set_status("Playing.")
         else:
             self._show_error(RadioBrowserError("wxPython could not load this stream."))
@@ -305,6 +317,9 @@ class StationScoutFrame(wx.Frame):
                     station_name=station.name,
                     time=dialog.time_value(),
                     auto_play=dialog.auto_play.GetValue(),
+                    end_time=dialog.end_time_value(),
+                    show_name=dialog.show_name.GetValue().strip(),
+                    track_playlist=dialog.track_playlist.GetValue(),
                 )
                 self.state.timers.append(timer)
                 self.store.save(self.state)
@@ -322,6 +337,8 @@ class StationScoutFrame(wx.Frame):
         station = self._find_station(timer.stationuuid)
         if timer.auto_play and station:
             self.play_station(station)
+        if timer.track_playlist and station:
+            self.start_tracking(station, show_name=timer.show_name, stop_at=timer.end_time)
 
     def _find_station(self, stationuuid: str) -> Station | None:
         for group in (self.state.favorites, self.state.recents, self.results):
@@ -348,7 +365,13 @@ class StationScoutFrame(wx.Frame):
         self.recents_list.Set([station.name for station in self.state.recents])
         self.timers_list.Set(
             [
-                f"{timer.time} - {timer.station_name}{' - auto play' if timer.auto_play else ''}"
+                (
+                    f"{timer.time}"
+                    f"{f' to {timer.end_time}' if timer.end_time else ''}"
+                    f" - {timer.show_name or timer.station_name}"
+                    f"{' - tracking' if timer.track_playlist else ''}"
+                    f"{' - auto play' if timer.auto_play else ''}"
+                )
                 for timer in self.state.timers
             ]
         )
@@ -366,6 +389,48 @@ class StationScoutFrame(wx.Frame):
 
     def _set_status(self, text: str) -> None:
         self.status.SetLabel(text)
+
+    def _on_start_tracking(self, _event: wx.Event) -> None:
+        station = self.current_station or self._selected_station()
+        if not station:
+            self._set_status("Choose or play a station first.")
+            return
+        self.start_tracking(station)
+
+    def start_tracking(
+        self,
+        station: Station,
+        *,
+        show_name: str = "",
+        stop_at: str = "",
+    ) -> None:
+        self.stop_tracking()
+        self.track_stop_event.clear()
+        log_root = self.store.path.parent / "track sessions"
+        self.track_session = TrackSessionLog(root=log_root, station=station, show_name=show_name)
+        self._set_status(f"Tracking songs to {self.track_session.path}")
+        self._notify("Playlist tracking started", show_name or station.name)
+
+        def worker() -> None:
+            try:
+                for raw_title in self.track_reader.titles(station.url_resolved):
+                    if self.track_stop_event.is_set() or _stop_time_reached(stop_at):
+                        break
+                    entry = parse_stream_title(raw_title)
+                    if entry and self.track_session and self.track_session.add(entry):
+                        wx.CallAfter(self._set_status, f"Tracked: {entry.display_line()}")
+            except BaseException as exc:
+                wx.CallAfter(self._set_status, f"Tracking stopped: {exc}")
+            finally:
+                wx.CallAfter(self._notify, "Playlist tracking stopped", show_name or station.name)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def stop_tracking(self) -> None:
+        self.track_stop_event.set()
+        if self.track_session:
+            self._set_status(f"Tracking saved to {self.track_session.path}")
+        self.track_session = None
 
     def _show_error(self, exc: BaseException) -> None:
         self.search_button.Enable()
@@ -403,14 +468,34 @@ class TimerDialog(wx.Dialog):
         row.Add(self.time_picker, 0)
         self.auto_play = wx.CheckBox(self, label="Automatically start playback")
         self.auto_play.SetValue(True)
+        self.track_playlist = wx.CheckBox(self, label="Track songs for this show")
+        self.show_name = wx.TextCtrl(self, name="Show name")
+        end_row = wx.BoxSizer(wx.HORIZONTAL)
+        end_row.Add(wx.StaticText(self, label="End time"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.end_time_picker = wx.adv.TimePickerCtrl(self)
+        end_row.Add(self.end_time_picker, 0)
         root.Add(row, 0, wx.ALL, 12)
         root.Add(self.auto_play, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        root.Add(self.track_playlist, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        root.Add(wx.StaticText(self, label="Show name"), 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        root.Add(self.show_name, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        root.Add(end_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         root.Add(self.CreateSeparatedButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 12)
         self.SetSizerAndFit(root)
 
     def time_value(self) -> str:
         value = self.time_picker.GetValue()
         return f"{value.GetHour():02d}:{value.GetMinute():02d}"
+
+    def end_time_value(self) -> str:
+        value = self.end_time_picker.GetValue()
+        return f"{value.GetHour():02d}:{value.GetMinute():02d}"
+
+
+def _stop_time_reached(stop_at: str) -> bool:
+    if not stop_at:
+        return False
+    return dt.datetime.now().strftime("%H:%M") >= stop_at
 
 
 class StationScoutApp(wx.App):

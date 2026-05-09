@@ -115,6 +115,9 @@ class TuneTimer:
     time: str
     enabled: bool = True
     auto_play: bool = True
+    end_time: str = ""
+    show_name: str = ""
+    track_playlist: bool = False
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -123,6 +126,9 @@ class TuneTimer:
             "time": self.time,
             "enabled": self.enabled,
             "auto_play": self.auto_play,
+            "end_time": self.end_time,
+            "show_name": self.show_name,
+            "track_playlist": self.track_playlist,
         }
 
     @classmethod
@@ -133,6 +139,9 @@ class TuneTimer:
             time=str(payload.get("time") or "09:00"),
             enabled=bool(payload.get("enabled", True)),
             auto_play=bool(payload.get("auto_play", True)),
+            end_time=str(payload.get("end_time") or ""),
+            show_name=str(payload.get("show_name") or ""),
+            track_playlist=bool(payload.get("track_playlist", False)),
         )
 
 

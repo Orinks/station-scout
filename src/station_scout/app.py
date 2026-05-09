@@ -41,15 +41,45 @@ class StationScoutFrame(wx.Frame):
         self.lastfm_client = self._create_lastfm_client()
         self.lastfm_cache = LastFmScrobbleCache(self.store.path.parent / "lastfm-scrobble-cache.jsonl")
 
+        self._build_menu()
         self._build_controls()
         self._bind_events()
+        self._build_accelerators()
         self._build_tray()
         self._refresh_saved_lists()
         self._set_status("Ready.")
+        self.name_input.SetFocus()
 
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_tick, self.timer)
         self.timer.Start(30_000)
+
+    def _build_menu(self) -> None:
+        self.ID_FOCUS_SEARCH = wx.NewIdRef()
+        self.ID_PLAY_SELECTED = wx.NewIdRef()
+        self.ID_STOP_PLAYBACK = wx.NewIdRef()
+        self.ID_ADD_TIMER = wx.NewIdRef()
+        self.ID_SETTINGS = wx.NewIdRef()
+        self.ID_START_TRACKING = wx.NewIdRef()
+        self.ID_STOP_TRACKING = wx.NewIdRef()
+
+        menu_bar = wx.MenuBar()
+        file_menu = wx.Menu()
+        file_menu.Append(self.ID_SETTINGS, "Settings...\tCtrl+,")
+        file_menu.AppendSeparator()
+        file_menu.Append(wx.ID_EXIT, "Quit\tAlt+F4")
+        menu_bar.Append(file_menu, "File")
+
+        playback_menu = wx.Menu()
+        playback_menu.Append(self.ID_FOCUS_SEARCH, "Focus search\tCtrl+F")
+        playback_menu.Append(self.ID_PLAY_SELECTED, "Play selected\tCtrl+P")
+        playback_menu.Append(self.ID_STOP_PLAYBACK, "Stop\tCtrl+S")
+        playback_menu.AppendSeparator()
+        playback_menu.Append(self.ID_ADD_TIMER, "Add tune-in timer\tCtrl+T")
+        playback_menu.Append(self.ID_START_TRACKING, "Start tracking\tCtrl+Shift+T")
+        playback_menu.Append(self.ID_STOP_TRACKING, "Stop tracking\tCtrl+Shift+S")
+        menu_bar.Append(playback_menu, "Playback")
+        self.SetMenuBar(menu_bar)
 
     def _build_controls(self) -> None:
         panel = wx.Panel(self)
@@ -89,9 +119,14 @@ class StationScoutFrame(wx.Frame):
             form.Add(control, 1, wx.EXPAND)
         search_box.Add(form, 0, wx.EXPAND | wx.ALL, 8)
 
-        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        search_buttons = wx.BoxSizer(wx.HORIZONTAL)
         self.search_button = wx.Button(panel, label="Search")
         self.open_direct_search_button = wx.Button(panel, label="Open direct URL search")
+        for button in (self.search_button, self.open_direct_search_button):
+            search_buttons.Add(button, 0, wx.RIGHT, 8)
+        search_box.Add(search_buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+
+        actions_box = wx.StaticBoxSizer(wx.HORIZONTAL, panel, "Station actions")
         self.play_button = wx.Button(panel, label="Play selected")
         self.stop_button = wx.Button(panel, label="Stop")
         self.favorite_button = wx.Button(panel, label="Add favorite")
@@ -99,13 +134,7 @@ class StationScoutFrame(wx.Frame):
         self.timer_button = wx.Button(panel, label="Add tune-in timer")
         self.start_tracking_button = wx.Button(panel, label="Start tracking")
         self.stop_tracking_button = wx.Button(panel, label="Stop tracking")
-        self.log_folder_button = wx.Button(panel, label="Choose log folder")
-        self.connect_lastfm_button = wx.Button(panel, label="Connect Last.fm")
-        self.finish_lastfm_button = wx.Button(panel, label="Finish Last.fm")
-        self.connect_spotify_button = wx.Button(panel, label="Connect Spotify")
         for button in (
-            self.search_button,
-            self.open_direct_search_button,
             self.play_button,
             self.stop_button,
             self.favorite_button,
@@ -113,13 +142,8 @@ class StationScoutFrame(wx.Frame):
             self.timer_button,
             self.start_tracking_button,
             self.stop_tracking_button,
-            self.log_folder_button,
-            self.connect_lastfm_button,
-            self.finish_lastfm_button,
-            self.connect_spotify_button,
         ):
-            buttons.Add(button, 0, wx.RIGHT, 8)
-        search_box.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
+            actions_box.Add(button, 0, wx.RIGHT, 8)
 
         body = wx.BoxSizer(wx.HORIZONTAL)
         self.station_list = wx.ListCtrl(panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
@@ -149,13 +173,21 @@ class StationScoutFrame(wx.Frame):
         body.Add(self.station_list, 2, wx.EXPAND | wx.RIGHT, 10)
         body.Add(side, 1, wx.EXPAND)
 
-        self.status = wx.StaticText(panel, label="")
+        self.CreateStatusBar()
         root.Add(search_box, 0, wx.EXPAND | wx.ALL, 10)
+        root.Add(actions_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         root.Add(body, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
-        root.Add(self.status, 0, wx.EXPAND | wx.ALL, 10)
         panel.SetSizer(root)
 
     def _bind_events(self) -> None:
+        self.Bind(wx.EVT_MENU, self._on_settings, id=self.ID_SETTINGS)
+        self.Bind(wx.EVT_MENU, lambda _event: self.Close(), id=wx.ID_EXIT)
+        self.Bind(wx.EVT_MENU, self._on_focus_search, id=self.ID_FOCUS_SEARCH)
+        self.Bind(wx.EVT_MENU, self._on_play_selected, id=self.ID_PLAY_SELECTED)
+        self.Bind(wx.EVT_MENU, lambda _event: self.stop_playback(), id=self.ID_STOP_PLAYBACK)
+        self.Bind(wx.EVT_MENU, self._on_add_timer, id=self.ID_ADD_TIMER)
+        self.Bind(wx.EVT_MENU, self._on_start_tracking, id=self.ID_START_TRACKING)
+        self.Bind(wx.EVT_MENU, lambda _event: self.stop_tracking(), id=self.ID_STOP_TRACKING)
         self.Bind(wx.EVT_BUTTON, self._on_search, self.search_button)
         self.Bind(wx.EVT_BUTTON, self._on_open_direct_search, self.open_direct_search_button)
         self.Bind(wx.EVT_BUTTON, self._on_play_selected, self.play_button)
@@ -165,15 +197,27 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self._on_add_timer, self.timer_button)
         self.Bind(wx.EVT_BUTTON, self._on_start_tracking, self.start_tracking_button)
         self.Bind(wx.EVT_BUTTON, lambda _event: self.stop_tracking(), self.stop_tracking_button)
-        self.Bind(wx.EVT_BUTTON, self._on_choose_log_folder, self.log_folder_button)
-        self.Bind(wx.EVT_BUTTON, self._on_connect_lastfm, self.connect_lastfm_button)
-        self.Bind(wx.EVT_BUTTON, self._on_finish_lastfm, self.finish_lastfm_button)
-        self.Bind(wx.EVT_BUTTON, self._on_connect_spotify, self.connect_spotify_button)
         self.Bind(wx.EVT_CHOICE, self._on_search_source_changed, self.search_source)
         self.station_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play_selected)
         self.favorites_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("favorites"))
         self.recents_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("recents"))
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
         self.Bind(wx.EVT_CLOSE, self._on_close)
+
+    def _build_accelerators(self) -> None:
+        self.SetAcceleratorTable(
+            wx.AcceleratorTable(
+                [
+                    (wx.ACCEL_CTRL, ord("F"), self.ID_FOCUS_SEARCH),
+                    (wx.ACCEL_CTRL, ord("P"), self.ID_PLAY_SELECTED),
+                    (wx.ACCEL_CTRL, ord("S"), self.ID_STOP_PLAYBACK),
+                    (wx.ACCEL_CTRL, ord("T"), self.ID_ADD_TIMER),
+                    (wx.ACCEL_CTRL, ord(","), self.ID_SETTINGS),
+                    (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("T"), self.ID_START_TRACKING),
+                    (wx.ACCEL_CTRL | wx.ACCEL_SHIFT, ord("S"), self.ID_STOP_TRACKING),
+                ]
+            )
+        )
 
     def _build_tray(self) -> None:
         self.tray = wx.adv.TaskBarIcon()
@@ -267,6 +311,17 @@ class StationScoutFrame(wx.Frame):
         station = self._selected_station()
         if station:
             self.play_station(station)
+
+    def _on_focus_search(self, _event: wx.Event) -> None:
+        self.name_input.SetFocus()
+        self.name_input.SelectAll()
+
+    def _on_settings(self, _event: wx.Event) -> None:
+        dialog = SettingsDialog(self)
+        try:
+            dialog.ShowModal()
+        finally:
+            dialog.Destroy()
 
     def play_station(self, station: Station) -> None:
         if not station.url_resolved:
@@ -372,6 +427,17 @@ class StationScoutFrame(wx.Frame):
         if selection != wx.NOT_FOUND and selection < len(source):
             self.play_station(source[selection])
 
+    def _on_char_hook(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_RETURN:
+            focus = wx.Window.FindFocus()
+            if focus == self.favorites_list:
+                self._play_saved("favorites")
+                return
+            if focus == self.recents_list:
+                self._play_saved("recents")
+                return
+        event.Skip()
+
     def _selected_station(self) -> Station | None:
         index = self.station_list.GetFirstSelected()
         if index == -1 or index >= len(self.results):
@@ -406,7 +472,7 @@ class StationScoutFrame(wx.Frame):
         event.Skip()
 
     def _set_status(self, text: str) -> None:
-        self.status.SetLabel(text)
+        self.SetStatusText(text)
 
     def _on_start_tracking(self, _event: wx.Event) -> None:
         station = self.current_station or self._selected_station()
@@ -576,6 +642,91 @@ class StationScoutFrame(wx.Frame):
         threading.Thread(target=runner, daemon=True).start()
 
 
+class SettingsDialog(wx.Dialog):
+    def __init__(self, parent: StationScoutFrame) -> None:
+        super().__init__(parent, title="Station Scout settings")
+        self.parent_frame = parent
+        root = wx.BoxSizer(wx.VERTICAL)
+
+        storage_box = wx.StaticBoxSizer(wx.VERTICAL, self, "Playlist logs")
+        storage_box.Add(
+            wx.StaticText(self, label="Folder"),
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP,
+            12,
+        )
+        folder_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.log_folder_value = wx.TextCtrl(self, style=wx.TE_READONLY)
+        self.log_folder_button = wx.Button(self, label="Choose folder")
+        folder_row.Add(self.log_folder_value, 1, wx.EXPAND | wx.RIGHT, 8)
+        folder_row.Add(self.log_folder_button, 0)
+        storage_box.Add(folder_row, 0, wx.EXPAND | wx.ALL, 12)
+
+        lastfm_box = wx.StaticBoxSizer(wx.VERTICAL, self, "Last.fm")
+        self.lastfm_status = wx.StaticText(self)
+        lastfm_buttons = wx.BoxSizer(wx.HORIZONTAL)
+        self.connect_lastfm_button = wx.Button(self, label="Connect Last.fm")
+        self.finish_lastfm_button = wx.Button(self, label="Finish Last.fm")
+        lastfm_buttons.Add(self.connect_lastfm_button, 0, wx.RIGHT, 8)
+        lastfm_buttons.Add(self.finish_lastfm_button, 0)
+        lastfm_box.Add(self.lastfm_status, 0, wx.EXPAND | wx.ALL, 12)
+        lastfm_box.Add(lastfm_buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+
+        spotify_box = wx.StaticBoxSizer(wx.VERTICAL, self, "Spotify")
+        self.spotify_status = wx.StaticText(self)
+        self.connect_spotify_button = wx.Button(self, label="Connect Spotify")
+        spotify_box.Add(self.spotify_status, 0, wx.EXPAND | wx.ALL, 12)
+        spotify_box.Add(self.connect_spotify_button, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+
+        root.Add(storage_box, 0, wx.EXPAND | wx.ALL, 12)
+        root.Add(lastfm_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        root.Add(spotify_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        root.Add(self.CreateStdDialogButtonSizer(wx.OK), 0, wx.EXPAND | wx.ALL, 12)
+        self.SetSizerAndFit(root)
+        self.SetMinSize((520, self.GetSize().height))
+
+        self.Bind(wx.EVT_BUTTON, self._on_choose_log_folder, self.log_folder_button)
+        self.Bind(wx.EVT_BUTTON, self._on_connect_lastfm, self.connect_lastfm_button)
+        self.Bind(wx.EVT_BUTTON, self._on_finish_lastfm, self.finish_lastfm_button)
+        self.Bind(wx.EVT_BUTTON, self._on_connect_spotify, self.connect_spotify_button)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self._refresh()
+        self.log_folder_button.SetFocus()
+
+    def _refresh(self) -> None:
+        state = self.parent_frame.state
+        self.log_folder_value.SetValue(str(self.parent_frame.store.track_log_folder(state)))
+        if state.lastfm_enabled:
+            self.lastfm_status.SetLabel(f"Connected as {state.lastfm_username or 'your account'}.")
+        elif state.lastfm_pending_token:
+            self.lastfm_status.SetLabel("Waiting for browser approval. Choose Finish Last.fm afterward.")
+        else:
+            self.lastfm_status.SetLabel("Not connected.")
+        self.spotify_status.SetLabel("Connected." if state.spotify_enabled else "Not connected.")
+
+    def _on_choose_log_folder(self, _event: wx.Event) -> None:
+        self.parent_frame._on_choose_log_folder(_event)
+        self._refresh()
+
+    def _on_connect_lastfm(self, _event: wx.Event) -> None:
+        self.parent_frame._on_connect_lastfm(_event)
+        self._refresh()
+
+    def _on_finish_lastfm(self, _event: wx.Event) -> None:
+        self.parent_frame._on_finish_lastfm(_event)
+        self._refresh()
+
+    def _on_connect_spotify(self, _event: wx.Event) -> None:
+        self.parent_frame._on_connect_spotify(_event)
+        self._refresh()
+
+    def _on_char_hook(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+            return
+        event.Skip()
+
+
 class TimerDialog(wx.Dialog):
     def __init__(self, parent: wx.Window, station_name: str) -> None:
         super().__init__(parent, title=f"Add timer for {station_name}")
@@ -598,8 +749,10 @@ class TimerDialog(wx.Dialog):
         root.Add(wx.StaticText(self, label="Show name"), 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
         root.Add(self.show_name, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         root.Add(end_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
-        root.Add(self.CreateSeparatedButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 12)
+        root.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 12)
         self.SetSizerAndFit(root)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self.time_picker.SetFocus()
 
     def time_value(self) -> str:
         value = self.time_picker.GetValue()
@@ -608,6 +761,12 @@ class TimerDialog(wx.Dialog):
     def end_time_value(self) -> str:
         value = self.end_time_picker.GetValue()
         return f"{value.GetHour():02d}:{value.GetMinute():02d}"
+
+    def _on_char_hook(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+            return
+        event.Skip()
 
 
 def _stop_time_reached(stop_at: str) -> bool:

@@ -4,6 +4,7 @@ import datetime as dt
 import threading
 import webbrowser
 from collections.abc import Callable
+from urllib.parse import urlparse
 
 import requests
 import wx
@@ -90,19 +91,7 @@ class StationScoutFrame(wx.Frame):
         panel = wx.Panel(self)
         root = wx.BoxSizer(wx.VERTICAL)
 
-        search_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Search stations")
-        source_row = wx.BoxSizer(wx.HORIZONTAL)
-        source_label = wx.StaticText(panel, label="Source")
-        self.search_source = wx.Choice(
-            panel,
-            choices=["Radio Browser", "Direct stream URL search"],
-            name="Search source",
-        )
-        _describe_control(self.search_source, "Search source")
-        self.search_source.SetSelection(0)
-        source_row.Add(source_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        source_row.Add(self.search_source, 0)
-        search_box.Add(source_row, 0, wx.EXPAND | wx.ALL, 8)
+        search_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Search Radio Browser")
 
         form = wx.FlexGridSizer(2, 4, 6, 8)
         form.AddGrowableCol(1)
@@ -129,8 +118,8 @@ class StationScoutFrame(wx.Frame):
 
         search_buttons = wx.BoxSizer(wx.HORIZONTAL)
         self.search_button = wx.Button(panel, label="Search")
-        self.open_direct_search_button = wx.Button(panel, label="Open direct URL search")
-        for button in (self.search_button, self.open_direct_search_button):
+        self.direct_stream_button = wx.Button(panel, label="Find direct stream URL")
+        for button in (self.search_button, self.direct_stream_button):
             search_buttons.Add(button, 0, wx.RIGHT, 8)
         search_box.Add(search_buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
@@ -209,7 +198,7 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_start_tracking, id=self.ID_START_TRACKING)
         self.Bind(wx.EVT_MENU, lambda _event: self.stop_tracking(), id=self.ID_STOP_TRACKING)
         self.Bind(wx.EVT_BUTTON, self._on_search, self.search_button)
-        self.Bind(wx.EVT_BUTTON, self._on_open_direct_search, self.open_direct_search_button)
+        self.Bind(wx.EVT_BUTTON, self._on_direct_stream_fallback, self.direct_stream_button)
         self.Bind(wx.EVT_BUTTON, self._on_play_selected, self.play_button)
         self.Bind(wx.EVT_BUTTON, lambda _event: self.stop_playback(), self.stop_button)
         self.Bind(wx.EVT_BUTTON, self._on_add_favorite, self.favorite_button)
@@ -217,8 +206,8 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self._on_add_timer, self.timer_button)
         self.Bind(wx.EVT_BUTTON, self._on_start_tracking, self.start_tracking_button)
         self.Bind(wx.EVT_BUTTON, lambda _event: self.stop_tracking(), self.stop_tracking_button)
-        self.Bind(wx.EVT_CHOICE, self._on_search_source_changed, self.search_source)
         self.station_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play_selected)
+        self.media.Bind(wx.media.EVT_MEDIA_LOADED, self._on_media_loaded)
         self.favorites_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("favorites"))
         self.recents_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("recents"))
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
@@ -263,31 +252,18 @@ class StationScoutFrame(wx.Frame):
         event.Skip()
 
     def _on_search(self, _event: wx.Event) -> None:
-        source = self.search_source.GetStringSelection()
-        self._set_status(f"Searching {source}...")
+        self._set_status("Searching Radio Browser...")
         self.search_button.Disable()
-        if source == "Direct stream URL search":
-            try:
-                station = station_from_direct_url(
-                    name=self.name_input.GetValue().strip(),
-                    url=self.tag_input.GetValue().strip(),
-                    homepage=self.country_input.GetValue().strip(),
-                )
-            except ValueError as exc:
-                self._show_error(exc)
-            else:
-                self._show_results([station])
-        else:
-            self._run_background(
-                lambda: self.client.search(
-                    name=self.name_input.GetValue().strip(),
-                    country=self.country_input.GetValue().strip(),
-                    language=self.language_input.GetValue().strip(),
-                    tag=self.tag_input.GetValue().strip(),
-                ),
-                self._show_results,
-                self._show_error,
-            )
+        self._run_background(
+            lambda: self.client.search(
+                name=self.name_input.GetValue().strip(),
+                country=self.country_input.GetValue().strip(),
+                language=self.language_input.GetValue().strip(),
+                tag=self.tag_input.GetValue().strip(),
+            ),
+            self._show_results,
+            self._show_error,
+        )
 
     def _show_results(self, stations: list[Station]) -> None:
         self.search_button.Enable()
@@ -299,41 +275,25 @@ class StationScoutFrame(wx.Frame):
             self.station_list.SetItem(index, 2, station.language)
             self.station_list.SetItem(index, 3, station.quality_label())
             self.station_list.SetItem(index, 4, station.source)
+        if stations:
+            self.station_list.Select(0)
+            self.station_list.Focus(0)
+            self.station_list.SetFocus()
         self._set_status(f"{len(stations)} stations found.")
 
-    def _on_search_source_changed(self, _event: wx.Event) -> None:
-        direct_mode = self.search_source.GetStringSelection() == "Direct stream URL search"
-        self.language_input.Enable(not direct_mode)
-        if direct_mode:
-            self.name_label.SetLabel("Name or call letters")
-            self.country_label.SetLabel("Website")
-            self.language_label.SetLabel("Language")
-            self.tag_label.SetLabel("Direct stream URL")
-            _describe_control(self.name_input, "Station name or call letters")
-            _describe_control(self.country_input, "Station website")
-            _describe_control(self.language_input, "Language")
-            _describe_control(self.tag_input, "Direct stream URL")
-            self._set_status(
-                "Open direct URL search, copy the stream URL, then paste it into Direct stream URL."
-            )
-        else:
-            self.name_label.SetLabel("Name")
-            self.country_label.SetLabel("Country")
-            self.language_label.SetLabel("Language")
-            self.tag_label.SetLabel("Tag")
-            _describe_control(self.name_input, "Station name")
-            _describe_control(self.country_input, "Country")
-            _describe_control(self.language_input, "Language")
-            _describe_control(self.tag_input, "Tag")
-            self._set_status("Radio Browser search is ready.")
-
-    def _on_open_direct_search(self, _event: wx.Event) -> None:
-        query = self.name_input.GetValue().strip()
-        if not query:
-            self._set_status("Enter a station name or call letters first.")
-            return
-        webbrowser.open(streamurl_search_url(query))
-        self._set_status("Opened StreamURL.link search in your browser.")
+    def _on_direct_stream_fallback(self, _event: wx.Event) -> None:
+        dialog = DirectStreamDialog(self, self.name_input.GetValue().strip())
+        try:
+            if dialog.ShowModal() == wx.ID_OK:
+                try:
+                    station = dialog.station()
+                except ValueError as exc:
+                    self._show_error(exc)
+                    return
+                self._show_results([station])
+                self._set_status("Direct stream URL added. Press Enter or Play selected to tune in.")
+        finally:
+            dialog.Destroy()
 
     def _on_play_selected(self, _event: wx.Event) -> None:
         station = self._selected_station()
@@ -375,13 +335,20 @@ class StationScoutFrame(wx.Frame):
         if not url:
             self._show_error(RadioBrowserError("Radio Browser did not return a stream URL."))
             return
-        if self.media.Load(url):
+        loaded = self.media.LoadURI(url) if _is_network_url(url) else self.media.Load(url)
+        if loaded:
             self.media.Play()
             if self.current_station:
                 self.current_station = Station.from_api({**self.current_station.to_json(), "url_resolved": url})
-            self._set_status("Playing.")
+            station_name = self.current_station.name if self.current_station else "stream"
+            self._set_status(f"Starting {station_name}...")
         else:
-            self._show_error(RadioBrowserError("wxPython could not load this stream."))
+            self._show_error(RadioBrowserError(f"wxPython could not load this stream: {url}"))
+
+    def _on_media_loaded(self, event: wx.media.MediaEvent) -> None:
+        self.media.Play()
+        self._set_status(f"Playing {self.current_station.name if self.current_station else 'stream'}.")
+        event.Skip()
 
     def stop_playback(self) -> None:
         self.media.Stop()
@@ -458,6 +425,9 @@ class StationScoutFrame(wx.Frame):
     def _on_char_hook(self, event: wx.KeyEvent) -> None:
         if event.GetKeyCode() == wx.WXK_RETURN:
             focus = wx.Window.FindFocus()
+            if focus == self.station_list:
+                self._on_play_selected(event)
+                return
             if focus == self.favorites_list:
                 self._play_saved("favorites")
                 return
@@ -670,6 +640,63 @@ class StationScoutFrame(wx.Frame):
         threading.Thread(target=runner, daemon=True).start()
 
 
+class DirectStreamDialog(wx.Dialog):
+    def __init__(self, parent: wx.Window, initial_name: str = "") -> None:
+        super().__init__(parent, title="Find direct stream URL")
+        root = wx.BoxSizer(wx.VERTICAL)
+
+        form = wx.FlexGridSizer(3, 2, 6, 8)
+        form.AddGrowableCol(1)
+        name_label = wx.StaticText(self, label="Name")
+        self.name_input = wx.TextCtrl(self, value=initial_name)
+        website_label = wx.StaticText(self, label="Website")
+        self.website_input = wx.TextCtrl(self)
+        url_label = wx.StaticText(self, label="Direct stream URL")
+        self.url_input = wx.TextCtrl(self)
+        for label, control, description in (
+            (name_label, self.name_input, "Station name or call letters"),
+            (website_label, self.website_input, "Station website"),
+            (url_label, self.url_input, "Direct stream URL"),
+        ):
+            _describe_control(control, description)
+            form.Add(label, 0, wx.ALIGN_CENTER_VERTICAL)
+            form.Add(control, 1, wx.EXPAND)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        self.open_search_button = wx.Button(self, label="Open direct URL search")
+        buttons.Add(self.open_search_button, 0, wx.RIGHT, 8)
+
+        root.Add(form, 0, wx.EXPAND | wx.ALL, 12)
+        root.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+        root.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 12)
+        self.SetSizerAndFit(root)
+        self.SetMinSize((520, self.GetSize().height))
+
+        self.Bind(wx.EVT_BUTTON, self._on_open_search, self.open_search_button)
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        self.name_input.SetFocus()
+
+    def station(self) -> Station:
+        return station_from_direct_url(
+            name=self.name_input.GetValue(),
+            url=self.url_input.GetValue(),
+            homepage=self.website_input.GetValue(),
+        )
+
+    def _on_open_search(self, _event: wx.Event) -> None:
+        query = self.name_input.GetValue().strip()
+        if query:
+            webbrowser.open(streamurl_search_url(query))
+            return
+        self.name_input.SetFocus()
+
+    def _on_char_hook(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_ESCAPE:
+            self.EndModal(wx.ID_CANCEL)
+            return
+        event.Skip()
+
+
 class SettingsDialog(wx.Dialog):
     def __init__(self, parent: StationScoutFrame) -> None:
         super().__init__(parent, title="Station Scout settings")
@@ -802,6 +829,10 @@ def _stop_time_reached(stop_at: str) -> bool:
     if not stop_at:
         return False
     return dt.datetime.now().strftime("%H:%M") >= stop_at
+
+
+def _is_network_url(url: str) -> bool:
+    return urlparse(url).scheme.lower() in {"http", "https", "icy"}
 
 
 class StationScoutApp(wx.App):

@@ -27,6 +27,12 @@ Station names are intentionally kept out of show logs so the files are easy to r
 Metadata that does not look like a clear artist/title pair is still kept, but marked with `?` so it
 can be reviewed later.
 
+Use **Choose log folder** to save tracking logs outside the app data folder. This is especially useful
+for portable builds where logs should live beside the app or on removable storage.
+
+Last.fm scrobbling is designed as an output adapter over the same session log. Radio/DJ-selected
+tracks are sent with `chosenByUser=0`, and uncertain metadata is not scrobbled.
+
 ## Notifications
 
 Station Scout uses wxPython for the desktop frontend. Native notifications are routed through

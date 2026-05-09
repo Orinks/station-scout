@@ -5,11 +5,13 @@ import threading
 import webbrowser
 from collections.abc import Callable
 
+import requests
 import wx
 import wx.adv
 import wx.media
 
 from station_scout.direct_streams import station_from_direct_url, streamurl_search_url
+from station_scout.lastfm import LastFmClient, LastFmError, LastFmScrobbleCache
 from station_scout.models import Station, TuneTimer
 from station_scout.notifications import create_notifier
 from station_scout.radio_browser import RadioBrowserClient, RadioBrowserError
@@ -34,6 +36,8 @@ class StationScoutFrame(wx.Frame):
         self.track_session: TrackSessionLog | None = None
         self.track_stop_event = threading.Event()
         self.track_reader = IcyMetadataReader()
+        self.lastfm_client = self._create_lastfm_client()
+        self.lastfm_cache = LastFmScrobbleCache(self.store.path.parent / "lastfm-scrobble-cache.jsonl")
 
         self._build_controls()
         self._bind_events()
@@ -93,6 +97,7 @@ class StationScoutFrame(wx.Frame):
         self.timer_button = wx.Button(panel, label="Add tune-in timer")
         self.start_tracking_button = wx.Button(panel, label="Start tracking")
         self.stop_tracking_button = wx.Button(panel, label="Stop tracking")
+        self.log_folder_button = wx.Button(panel, label="Choose log folder")
         for button in (
             self.search_button,
             self.open_direct_search_button,
@@ -103,6 +108,7 @@ class StationScoutFrame(wx.Frame):
             self.timer_button,
             self.start_tracking_button,
             self.stop_tracking_button,
+            self.log_folder_button,
         ):
             buttons.Add(button, 0, wx.RIGHT, 8)
         search_box.Add(buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
@@ -151,6 +157,7 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self._on_add_timer, self.timer_button)
         self.Bind(wx.EVT_BUTTON, self._on_start_tracking, self.start_tracking_button)
         self.Bind(wx.EVT_BUTTON, lambda _event: self.stop_tracking(), self.stop_tracking_button)
+        self.Bind(wx.EVT_BUTTON, self._on_choose_log_folder, self.log_folder_button)
         self.Bind(wx.EVT_CHOICE, self._on_search_source_changed, self.search_source)
         self.station_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play_selected)
         self.favorites_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("favorites"))
@@ -406,7 +413,7 @@ class StationScoutFrame(wx.Frame):
     ) -> None:
         self.stop_tracking()
         self.track_stop_event.clear()
-        log_root = self.store.path.parent / "track sessions"
+        log_root = self.store.track_log_folder(self.state)
         self.track_session = TrackSessionLog(root=log_root, station=station, show_name=show_name)
         self._set_status(f"Tracking songs to {self.track_session.path}")
         self._notify("Playlist tracking started", show_name or station.name)
@@ -418,6 +425,7 @@ class StationScoutFrame(wx.Frame):
                         break
                     entry = parse_stream_title(raw_title)
                     if entry and self.track_session and self.track_session.add(entry):
+                        self._send_lastfm(entry)
                         wx.CallAfter(self._set_status, f"Tracked: {entry.display_line()}")
             except BaseException as exc:
                 wx.CallAfter(self._set_status, f"Tracking stopped: {exc}")
@@ -431,6 +439,42 @@ class StationScoutFrame(wx.Frame):
         if self.track_session:
             self._set_status(f"Tracking saved to {self.track_session.path}")
         self.track_session = None
+
+    def _on_choose_log_folder(self, _event: wx.Event) -> None:
+        dialog = wx.DirDialog(
+            self,
+            "Choose playlist tracking log folder",
+            str(self.store.track_log_folder(self.state)),
+        )
+        try:
+            if dialog.ShowModal() == wx.ID_OK:
+                self.state.track_log_folder = dialog.GetPath()
+                self.store.save(self.state)
+                self._set_status(f"Track logs will be saved to {self.state.track_log_folder}")
+        finally:
+            dialog.Destroy()
+
+    def _create_lastfm_client(self) -> LastFmClient | None:
+        if not (
+            self.state.lastfm_api_key
+            and self.state.lastfm_api_secret
+            and self.state.lastfm_session_key
+        ):
+            return None
+        return LastFmClient(
+            api_key=self.state.lastfm_api_key,
+            api_secret=self.state.lastfm_api_secret,
+            session_key=self.state.lastfm_session_key,
+        )
+
+    def _send_lastfm(self, entry) -> None:
+        if not self.lastfm_client:
+            return
+        try:
+            self.lastfm_client.update_now_playing(entry)
+            self.lastfm_client.scrobble(entry)
+        except (LastFmError, requests.RequestException):
+            self.lastfm_cache.append(entry)
 
     def _show_error(self, exc: BaseException) -> None:
         self.search_button.Enable()

@@ -22,9 +22,31 @@ def test_play_creates_url_stream() -> None:
 
         assert radio.play("https://example.test/live") is True
 
-    stream_module.URLStream.assert_called_once_with(url="https://example.test/live")  # type: ignore[attr-defined]
+    stream_module.URLStream.assert_called_once_with(  # type: ignore[attr-defined]
+        url="https://example.test/live",
+        unicode=True,
+    )
     stream.play.assert_called_once()
     on_playing.assert_called_once()
+
+
+def test_ensure_sound_lib_initializes_output() -> None:
+    output_instance = MagicMock()
+    output_module = ModuleType("sound_lib.output")
+    output_module.Output = MagicMock(return_value=output_instance)  # type: ignore[attr-defined]
+    stream_module = ModuleType("sound_lib.stream")
+    stream_module.URLStream = MagicMock()  # type: ignore[attr-defined]
+
+    with (
+        patch.object(player_module, "_sound_lib_available", False),
+        patch.object(player_module, "_sound_lib_initialized", False),
+        patch.object(player_module, "_sound_lib_output", None),
+        patch.dict(sys.modules, {"sound_lib.output": output_module, "sound_lib.stream": stream_module}),
+    ):
+        assert player_module._ensure_sound_lib() is True
+        assert player_module._sound_lib_output is output_instance
+
+    output_module.Output.assert_called_once_with()  # type: ignore[attr-defined]
 
 
 def test_play_reports_missing_sound_lib() -> None:

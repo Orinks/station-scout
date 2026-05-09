@@ -7,16 +7,19 @@ logger = logging.getLogger(__name__)
 
 _sound_lib_initialized = False
 _sound_lib_available = False
+_sound_lib_output = None
 
 
 def _ensure_sound_lib() -> bool:
-    global _sound_lib_available, _sound_lib_initialized
+    global _sound_lib_available, _sound_lib_initialized, _sound_lib_output
     if _sound_lib_initialized:
         return _sound_lib_available
     _sound_lib_initialized = True
     try:
+        from sound_lib import output
         from sound_lib.stream import URLStream  # noqa: F401
 
+        _sound_lib_output = output.Output()
         _sound_lib_available = True
     except ImportError:
         logger.warning("sound_lib is not installed")
@@ -46,7 +49,7 @@ class RadioPlayer:
         try:
             from sound_lib.stream import URLStream
 
-            self._stream = URLStream(url=url)
+            self._stream = URLStream(url=url, unicode=True)
             self._stream.volume = self._volume
             self._stream.play()
         except Exception as exc:

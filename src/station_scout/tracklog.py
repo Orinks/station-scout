@@ -47,13 +47,14 @@ def parse_stream_title(raw_title: str, *, now: dt.datetime | None = None) -> Tra
     for separator in (" - ", " – ", " — ", " / "):
         if separator in raw:
             artist, title = [part.strip() for part in raw.split(separator, 1)]
+            title = _metadata_text_value(title) or title
             break
 
     if not artist or not title:
         match = re.match(r"(?P<title>.+?)\s+by\s+(?P<artist>.+)", raw, re.IGNORECASE)
         if match:
             artist = match.group("artist").strip()
-            title = match.group("title").strip()
+            title = _metadata_text_value(match.group("title")) or match.group("title").strip()
 
     if not artist or not title:
         uncertain = True
@@ -135,6 +136,13 @@ def _clean(value: str) -> str:
     value = re.sub(r"\s+", " ", value.replace("\x00", " ")).strip()
     value = re.sub(r"^\d+\.\s*", "", value)
     return value.strip(" -")
+
+
+def _metadata_text_value(value: str) -> str:
+    match = re.search(r"""\btext=(?P<quote>["'])(?P<text>.*?)(?P=quote)""", value, re.IGNORECASE)
+    if not match:
+        return ""
+    return _clean(match.group("text"))
 
 
 def _slug(value: str) -> str:

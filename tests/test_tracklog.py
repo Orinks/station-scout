@@ -20,6 +20,18 @@ def test_parse_title_by_artist_format() -> None:
     assert entry.display_line() == "Kate Bush - Running Up That Hill"
 
 
+def test_parse_artist_title_from_provider_metadata_blob() -> None:
+    entry = parse_stream_title(
+        'Justin Bieber - text="Yukon" song_spot="M" MediaBaseId="3142175" '
+        'itunesTrackId="0" amgTrackId="-1" amgArtistId="0" TAID="0" TPID="339293406"'
+    )
+
+    assert entry is not None
+    assert entry.artist == "Justin Bieber"
+    assert entry.title == "Yukon"
+    assert entry.display_line() == "Justin Bieber - Yukon"
+
+
 def test_unknown_or_bad_metadata_is_kept_but_marked_uncertain() -> None:
     entry = parse_stream_title("Transmission FM Station ID")
 

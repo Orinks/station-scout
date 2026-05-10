@@ -39,19 +39,27 @@ def parse_stream_title(raw_title: str, *, now: dt.datetime | None = None) -> Tra
     raw = _clean(raw_title)
     if not raw:
         return None
+    if _is_bare_station_identifier(raw):
+        return None
     lowered = raw.lower()
     uncertain = any(marker in lowered for marker in INVALID_TITLE_MARKERS)
     song_spot = _metadata_attribute(raw, "song_spot")
-    if song_spot and song_spot.upper() != "M":
+    if song_spot and song_spot.upper() in {"T"}:
         uncertain = True
 
     artist = ""
     title = ""
-    for separator in (" - ", " – ", " — ", " / "):
-        if separator in raw:
-            artist, title = [part.strip() for part in raw.split(separator, 1)]
-            title = _metadata_text_value(title) or title
-            break
+    metadata_artist = _metadata_attribute(raw, "artist")
+    metadata_title = _metadata_attribute(raw, "title")
+    if metadata_artist and metadata_title:
+        artist = _clean(metadata_artist)
+        title = _clean(metadata_title)
+    else:
+        for separator in (" - ", " – ", " — ", " / "):
+            if separator in raw:
+                artist, title = [part.strip() for part in raw.split(separator, 1)]
+                title = _metadata_text_value(title) or title
+                break
 
     if not artist or not title:
         match = re.match(r"(?P<title>.+?)\s+by\s+(?P<artist>.+)", raw, re.IGNORECASE)
@@ -164,6 +172,10 @@ def _metadata_attribute(value: str, name: str) -> str:
         re.IGNORECASE,
     )
     return match.group("value") if match else ""
+
+
+def _is_bare_station_identifier(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z0-9]{1,6}", value))
 
 
 def _slug(value: str) -> str:

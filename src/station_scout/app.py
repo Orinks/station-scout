@@ -41,6 +41,38 @@ from station_scout.tracklog import IcyMetadataReader, TrackEntry, TrackSessionLo
 APP_TITLE = "Station Scout"
 
 
+def station_scout_ui_blueprint() -> dict[str, tuple[str, ...] | str]:
+    """Return the intended AccessiWeather-style main-window structure."""
+    return {
+        "title": APP_TITLE,
+        "status_fields": ("Status", "Playback"),
+        "initial_focus": "Favorites",
+        "sections": (
+            "Station",
+            "Now Playing",
+            "Search Radio Browser",
+            "Stations",
+            "Saved Stations",
+            "Tune-in Timers",
+            "Recent Events",
+        ),
+        "primary_actions": (
+            "Play selected",
+            "Add favorite",
+            "Open website",
+            "Add tune-in timer",
+            "Start tracking",
+            "Stop tracking",
+        ),
+        "list_names": (
+            "Station search results",
+            "Favorite stations",
+            "Recently played stations",
+            "Tune-in timers",
+        ),
+    }
+
+
 def _describe_control(control: wx.Window, label: str) -> None:
     control.SetToolTip(label)
     control.SetHelpText(label)
@@ -79,6 +111,10 @@ def should_scrobble_lastfm(state: AppState, entry, sent_tracks: set[str]) -> boo
     if entry.uncertain or not entry.artist or not entry.title:
         return False
     return lastfm_track_key(entry) not in sent_tracks
+
+
+def should_show_stream_title(entry) -> bool:
+    return bool(entry.artist and entry.title and not entry.uncertain)
 
 
 def spotify_playlist_tracks(entries: list[TrackEntry]) -> list[tuple[str, str]]:
@@ -130,7 +166,7 @@ class StationScoutFrame(wx.Frame):
         self._build_tray()
         self._refresh_saved_lists()
         self._set_status("Ready.")
-        self.name_input.SetFocus()
+        wx.CallAfter(self._set_initial_focus)
 
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_tick, self.timer)
@@ -179,6 +215,20 @@ class StationScoutFrame(wx.Frame):
     def _build_controls(self) -> None:
         panel = wx.Panel(self)
         root = wx.BoxSizer(wx.VERTICAL)
+
+        station_row = wx.BoxSizer(wx.HORIZONTAL)
+        station_row.Add(wx.StaticText(panel, label="Station:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.station_choice = wx.Choice(panel, name="Station selection")
+        _describe_control(self.station_choice, "Station selection")
+        station_row.Add(self.station_choice, 1, wx.EXPAND | wx.RIGHT, 8)
+        self.refresh_saved_button = wx.Button(panel, label="Refresh saved")
+        station_row.Add(self.refresh_saved_button, 0)
+
+        now_playing_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Now Playing")
+        self.now_playing = wx.StaticText(panel, label="Nothing playing")
+        self.now_playing.Wrap(760)
+        _describe_control(self.now_playing, "Now playing")
+        now_playing_box.Add(self.now_playing, 0, wx.EXPAND | wx.ALL, 8)
 
         search_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Search Radio Browser")
 
@@ -229,45 +279,57 @@ class StationScoutFrame(wx.Frame):
         ):
             actions_box.Add(button, 0, wx.RIGHT, 8)
 
-        body = wx.BoxSizer(wx.HORIZONTAL)
-        station_results = wx.BoxSizer(wx.VERTICAL)
-        station_results_label = wx.StaticText(panel, label="Stations")
+        body = wx.BoxSizer(wx.VERTICAL)
+        station_results = wx.StaticBoxSizer(wx.VERTICAL, panel, "Station Search Results")
         self.station_list = wx.ListCtrl(panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
-        _describe_control(self.station_list, "Stations")
+        _describe_control(self.station_list, "Station search results")
         self.station_list.AppendColumn("Station", width=240)
         self.station_list.AppendColumn("Location", width=180)
         self.station_list.AppendColumn("Language", width=150)
         self.station_list.AppendColumn("Quality", width=170)
         self.station_list.AppendColumn("Source", width=140)
-        station_results.Add(station_results_label, 0, wx.BOTTOM, 4)
-        station_results.Add(self.station_list, 1, wx.EXPAND)
+        station_results.Add(self.station_list, 1, wx.EXPAND | wx.ALL, 8)
 
-        side = wx.BoxSizer(wx.VERTICAL)
-        now_playing_label = wx.StaticText(panel, label="Now playing")
-        self.now_playing = wx.StaticText(panel, label="Nothing playing")
-        self.now_playing.Wrap(280)
-        favorites_label = wx.StaticText(panel, label="Favorites")
-        self.favorites_list = wx.ListBox(panel, name="Favorites")
-        _describe_control(self.favorites_list, "Favorites")
-        recents_label = wx.StaticText(panel, label="Recent stations")
-        self.recents_list = wx.ListBox(panel, name="Recent stations")
-        _describe_control(self.recents_list, "Recent stations")
-        timers_label = wx.StaticText(panel, label="Timers")
+        saved_box = wx.StaticBoxSizer(wx.HORIZONTAL, panel, "Saved Stations")
+        favorites_col = wx.BoxSizer(wx.VERTICAL)
+        favorites_col.Add(wx.StaticText(panel, label="Favorite stations:"), 0, wx.BOTTOM, 4)
+        self.favorites_list = wx.ListBox(panel, name="Favorite stations")
+        _describe_control(self.favorites_list, "Favorite stations")
+        favorites_col.Add(self.favorites_list, 1, wx.EXPAND)
+        recents_col = wx.BoxSizer(wx.VERTICAL)
+        recents_col.Add(wx.StaticText(panel, label="Recently played stations:"), 0, wx.BOTTOM, 4)
+        self.recents_list = wx.ListBox(panel, name="Recently played stations")
+        _describe_control(self.recents_list, "Recently played stations")
+        recents_col.Add(self.recents_list, 1, wx.EXPAND)
+        saved_box.Add(favorites_col, 1, wx.EXPAND | wx.ALL, 8)
+        saved_box.Add(recents_col, 1, wx.EXPAND | wx.TOP | wx.RIGHT | wx.BOTTOM, 8)
+
+        lower = wx.BoxSizer(wx.HORIZONTAL)
+        timers_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Tune-in Timers")
         self.timers_list = wx.ListBox(panel, name="Tune-in timers")
         _describe_control(self.timers_list, "Tune-in timers")
-        side.Add(now_playing_label, 0, wx.BOTTOM, 4)
-        side.Add(self.now_playing, 0, wx.EXPAND | wx.BOTTOM, 8)
-        side.Add(favorites_label, 0, wx.BOTTOM, 4)
-        side.Add(self.favorites_list, 1, wx.EXPAND | wx.BOTTOM, 8)
-        side.Add(recents_label, 0, wx.BOTTOM, 4)
-        side.Add(self.recents_list, 1, wx.EXPAND | wx.BOTTOM, 8)
-        side.Add(timers_label, 0, wx.BOTTOM, 4)
-        side.Add(self.timers_list, 1, wx.EXPAND)
+        timers_box.Add(self.timers_list, 1, wx.EXPAND | wx.ALL, 8)
+        events_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Recent Events")
+        self.events_display = wx.TextCtrl(
+            panel,
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2,
+            name="Recent events",
+        )
+        _describe_control(self.events_display, "Recent events")
+        events_box.Add(self.events_display, 1, wx.EXPAND | wx.ALL, 8)
+        lower.Add(timers_box, 1, wx.EXPAND | wx.RIGHT, 10)
+        lower.Add(events_box, 1, wx.EXPAND)
 
-        body.Add(station_results, 2, wx.EXPAND | wx.RIGHT, 10)
-        body.Add(side, 1, wx.EXPAND)
+        body.Add(station_results, 2, wx.EXPAND | wx.BOTTOM, 10)
+        body.Add(saved_box, 1, wx.EXPAND | wx.BOTTOM, 10)
+        body.Add(lower, 1, wx.EXPAND)
 
-        self.CreateStatusBar()
+        self.CreateStatusBar(2)
+        self.GetStatusBar().SetStatusWidths([-2, -1])
+        self.SetMinSize((820, 720))
+        self.SetSize((980, 760))
+        root.Add(station_row, 0, wx.EXPAND | wx.ALL, 10)
+        root.Add(now_playing_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         root.Add(search_box, 0, wx.EXPAND | wx.ALL, 10)
         root.Add(actions_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         root.Add(body, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
@@ -290,6 +352,7 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _event: self.stop_tracking(), id=self.ID_STOP_TRACKING)
         self.Bind(wx.EVT_BUTTON, self._on_search, self.search_button)
         self.Bind(wx.EVT_BUTTON, self._on_direct_stream_fallback, self.direct_stream_button)
+        self.Bind(wx.EVT_BUTTON, lambda _event: self._refresh_saved_lists(), self.refresh_saved_button)
         self.Bind(wx.EVT_BUTTON, self._on_playback_button, self.play_button)
         self.Bind(wx.EVT_BUTTON, self._on_add_favorite, self.favorite_button)
         self.Bind(wx.EVT_BUTTON, self._on_open_website, self.website_button)
@@ -297,10 +360,14 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self._on_start_tracking, self.start_tracking_button)
         self.Bind(wx.EVT_BUTTON, lambda _event: self.stop_tracking(), self.stop_tracking_button)
         self.station_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_play_selected)
+        self.station_choice.Bind(wx.EVT_CHOICE, self._on_station_choice)
         self.favorites_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("favorites"))
         self.recents_list.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self._play_saved("recents"))
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
         self.Bind(wx.EVT_CLOSE, self._on_close)
+
+    def _set_initial_focus(self) -> None:
+        self.favorites_list.SetFocus()
 
     def _build_accelerators(self) -> None:
         self.SetAcceleratorTable(
@@ -721,6 +788,12 @@ class StationScoutFrame(wx.Frame):
         if selection != wx.NOT_FOUND and selection < len(source):
             self.play_station(source[selection])
 
+    def _on_station_choice(self, _event: wx.Event) -> None:
+        stations = self.state.favorites
+        selection = self.station_choice.GetSelection()
+        if selection != wx.NOT_FOUND and selection < len(stations):
+            self.play_station(stations[selection])
+
     def _on_char_hook(self, event: wx.KeyEvent) -> None:
         if event.GetKeyCode() == wx.WXK_RETURN:
             focus = wx.Window.FindFocus()
@@ -744,6 +817,9 @@ class StationScoutFrame(wx.Frame):
     def _refresh_saved_lists(self) -> None:
         self.favorites_list.Set([station.name for station in self.state.favorites])
         self.recents_list.Set([station.name for station in self.state.recents])
+        self.station_choice.Set([station.name for station in self.state.favorites])
+        if self.state.favorites:
+            self.station_choice.SetSelection(0)
         self.timers_list.Set(
             [
                 (
@@ -770,10 +846,13 @@ class StationScoutFrame(wx.Frame):
         event.Skip()
 
     def _set_status(self, text: str) -> None:
-        self.SetStatusText(text)
+        self.SetStatusText(text, 0)
+        if hasattr(self, "events_display"):
+            self.events_display.AppendText(f"{text}\n")
 
     def _set_playback_title(self, now_playing: str = "") -> None:
         self.SetTitle(playback_window_title(now_playing))
+        self.SetStatusText(now_playing or "No playback", 1)
 
     def _refresh_playback_button(self) -> None:
         if self.sonos_device and self.current_station:
@@ -800,8 +879,12 @@ class StationScoutFrame(wx.Frame):
                     if stop_event.is_set():
                         break
                     entry = parse_stream_title(raw_title)
-                    if entry:
+                    if entry and should_show_stream_title(entry):
                         wx.CallAfter(self._on_stream_title, station.stationuuid, entry)
+                    elif entry:
+                        wx.CallAfter(self._on_ignored_stream_title, station.stationuuid, entry.raw)
+                    else:
+                        wx.CallAfter(self._on_ignored_stream_title, station.stationuuid, raw_title)
             except (requests.RequestException, ValueError) as exc:
                 wx.CallAfter(self._set_status, f"No stream title metadata: {exc}")
 
@@ -815,6 +898,9 @@ class StationScoutFrame(wx.Frame):
             return
         if self.track_stop_at and _stop_time_reached(self.track_stop_at):
             self.stop_tracking()
+        if not should_show_stream_title(entry):
+            self._on_ignored_stream_title(stationuuid, entry.raw)
+            return
         line = entry.display_line()
         self._set_playback_title(line)
         self.now_playing.SetLabel(f"{line}\n{self.current_station.name}")
@@ -823,6 +909,12 @@ class StationScoutFrame(wx.Frame):
             self.lastfm_sent_tracks.add(lastfm_track_key(entry))
         if self.track_session and self.track_session.add(entry, station=self.current_station):
             self._set_status(f"Tracked: {line}")
+
+    def _on_ignored_stream_title(self, stationuuid: str, raw_title: str) -> None:
+        if not self.current_station or self.current_station.stationuuid != stationuuid:
+            return
+        if hasattr(self, "events_display"):
+            self.events_display.AppendText(f"Ignored stream title metadata: {raw_title}\n")
 
     def _on_start_tracking(self, _event: wx.Event) -> None:
         station = self.current_station or self._selected_station()

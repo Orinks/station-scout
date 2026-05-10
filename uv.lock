@@ -34,6 +34,19 @@ wheels = [
 ]
 
 [[package]]
+name = "beautifulsoup4"
+version = "4.14.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "soupsieve" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c3/b0/1c6a16426d389813b48d95e26898aff79abbde42ad353958ad95cc8c9b21/beautifulsoup4-4.14.3.tar.gz", hash = "sha256:6292b1c5186d356bba669ef9f7f051757099565ad9ada5dd630bd9de5fa7fb86", size = 627737 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/39/47f9197bdd44df24d67ac8893641e16f386c984a0619ef2ee4c51fbbc019/beautifulsoup4-4.14.3-py3-none-any.whl", hash = "sha256:0918bfe44902e6ad8d57732ba310582e98da931428d231a5ecb9e7c703a735bb", size = 107721 },
+]
+
+[[package]]
 name = "bidict"
 version = "0.23.1"
 source = { registry = "https://pypi.org/simple" }
@@ -421,18 +434,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/43/4b/674af6ef2f97d56f0ab5153bf0bfa28ccb6c3ed4d1babf4305449668807b/keyring-25.7.0.tar.gz", hash = "sha256:fe01bd85eb3f8fb3dd0405defdeac9a5b4f6f0439edbb3149577f244a2e8245b", size = 63516 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/81/db/e655086b7f3a705df045bf0933bdd9c2f79bb3c97bfef1384598bb79a217/keyring-25.7.0-py3-none-any.whl", hash = "sha256:be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f", size = 39160 },
-]
-
-[[package]]
-name = "libloader"
-version = "1.4.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pywin32", marker = "sys_platform == 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d4/dd/58864bd93f74cd227996cec701713e27f6a57b1c189747cfefc9c9c2e00e/libloader-1.4.3.tar.gz", hash = "sha256:9c56b1ee2e866e314c35d1095d1e3b99c1c762e89a27bf26c98bd65d58f4e182", size = 6165 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/97/cb/dac60d530791146d52e2dab3a16531963d03899ea37eec77cc03ea8c281d/libloader-1.4.3-py3-none-any.whl", hash = "sha256:4cfd541496bed79a2b5f72c316e16312ce1dd72fab6ed837801aa5e53299d6da", size = 6190 },
 ]
 
 [[package]]
@@ -868,15 +869,22 @@ wheels = [
 
 [[package]]
 name = "sound-lib"
-version = "0.83"
-source = { registry = "https://pypi.org/simple" }
+version = "0.8.8"
+source = { git = "https://github.com/samtupy/sound_lib_macos_fixes.git#2b4f6ee2036928f9b4e9e87df7424014734ab4d3" }
 dependencies = [
-    { name = "libloader" },
-    { name = "platform-utils" },
+    { name = "beautifulsoup4" },
+    { name = "lxml" },
+    { name = "requests" },
+    { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6e/99/cd29df73c5375dd474f960ef0656083a78d07d126f01c49400f9b4ff650e/sound_lib-0.83.tar.gz", hash = "sha256:cac5e3112192cf9d13ac880fef6f82ca1346b6deccf80b2ffa16b7b792021f04", size = 4607043 }
+
+[[package]]
+name = "soupsieve"
+version = "2.8.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/ae/2d9c981590ed9999a0d91755b47fc74f74de286b0f5cee14c9269041e6c4/soupsieve-2.8.3.tar.gz", hash = "sha256:3267f1eeea4251fb42728b6dfb746edc9acaffc4a45b27e19450b676586e8349", size = 118627 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/5a/a7a2fd04c54bcc1cf574dd85a03400e0986419b5ae7813d7fe087c8a0d47/sound_lib-0.83-py2.py3-none-any.whl", hash = "sha256:20039a18d4767b1687605c13b49bc7322802deb63b752ab8ad586512a35e6fea", size = 4636033 },
+    { url = "https://files.pythonhosted.org/packages/46/2c/1462b1d0a634697ae9e55b3cecdcb64788e8b7d63f54d923fcd0bb140aed/soupsieve-2.8.3-py3-none-any.whl", hash = "sha256:ed64f2ba4eebeab06cc4962affce381647455978ffc1e36bb79a545b91f45a95", size = 37016 },
 ]
 
 [[package]]
@@ -886,6 +894,7 @@ source = { editable = "." }
 dependencies = [
     { name = "desktop-notifier", marker = "sys_platform == 'darwin'" },
     { name = "keyring" },
+    { name = "platform-utils" },
     { name = "pychromecast" },
     { name = "requests" },
     { name = "soco" },
@@ -905,10 +914,11 @@ dev = [
 requires-dist = [
     { name = "desktop-notifier", marker = "sys_platform == 'darwin'", specifier = ">=6.2" },
     { name = "keyring", specifier = ">=25.0" },
+    { name = "platform-utils", specifier = ">=1.6.0" },
     { name = "pychromecast", specifier = ">=14.0.10" },
     { name = "requests", specifier = ">=2.32" },
     { name = "soco", specifier = ">=0.31.0" },
-    { name = "sound-lib", specifier = ">=0.83" },
+    { name = "sound-lib", git = "https://github.com/samtupy/sound_lib_macos_fixes.git" },
     { name = "toasted", marker = "sys_platform == 'win32'", specifier = ">=0.2" },
     { name = "wxpython", specifier = ">=4.2" },
 ]
@@ -932,6 +942,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/39/a6/c1c0b08bc940fc9e2448db2b813f1c396c537d475591ddf12fb894c49e53/toasted-0.2.0.tar.gz", hash = "sha256:edf319e18a2c66730bf927eb83881b45cc456325b2908a30f7b74c3dee636aad", size = 28573 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/80/63/94021bbfeb6a235ac2a95c43aa48bbd855cebdf2961c21620b287fd2b156/toasted-0.2.0-py3-none-any.whl", hash = "sha256:5bf2f4f7f4909df3da7b5c29ad1d2d977b52a1fcd92ad848210cbcf28ce25d8e", size = 31441 },
+]
+
+[[package]]
+name = "tqdm"
+version = "4.67.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/09/a9/6ba95a270c6f1fbcd8dac228323f2777d886cb206987444e4bce66338dd4/tqdm-4.67.3.tar.gz", hash = "sha256:7d825f03f89244ef73f1d4ce193cb1774a8179fd96f31d7e1dcde62092b960bb", size = 169598 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/e1/3079a9ff9b8e11b846c6ac5c8b5bfb7ff225eee721825310c91b3b50304f/tqdm-4.67.3-py3-none-any.whl", hash = "sha256:ee1e4c0e59148062281c49d80b25b67771a127c85fc9676d3be5f243206826bf", size = 78374 },
 ]
 
 [[package]]

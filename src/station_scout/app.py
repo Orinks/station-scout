@@ -158,6 +158,7 @@ class StationScoutFrame(wx.Frame):
             on_stopped=self._on_player_stopped,
             on_error=self._on_player_error,
         )
+        self.player.set_volume(self.state.volume)
 
         self._build_menu()
         self._build_controls()
@@ -642,6 +643,8 @@ class StationScoutFrame(wx.Frame):
             )
             return
         level = self.player.change_volume(delta)
+        self.state.volume = level
+        self.store.save(self.state)
         self._set_status(f"Volume {round(level * 100)} percent.")
 
     def _on_remote_pause_changed(self, paused: bool) -> None:

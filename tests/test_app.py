@@ -6,7 +6,9 @@ from station_scout.app import (
     lastfm_track_key,
     playback_window_title,
     should_scrobble_lastfm,
+    should_show_stream_title,
     spotify_playlist_tracks,
+    station_scout_ui_blueprint,
 )
 from station_scout.storage import AppState
 from station_scout.tracklog import TrackEntry
@@ -70,3 +72,56 @@ def test_spotify_playlist_tracks_filters_uncertain_and_duplicates() -> None:
     ]
 
     assert spotify_playlist_tracks(entries) == [("Artist", "Song")]
+
+
+def test_uncertain_station_id_metadata_does_not_replace_now_playing() -> None:
+    entry = TrackEntry(
+        "Philly's #1 Hit Music Station",
+        "Q102",
+        "raw",
+        dt.datetime.now(),
+        uncertain=True,
+    )
+
+    assert not should_show_stream_title(entry)
+
+
+def test_station_scout_ui_blueprint_adapts_accessiweather_sections() -> None:
+    blueprint = station_scout_ui_blueprint()
+
+    assert blueprint["title"] == APP_TITLE
+    assert blueprint["status_fields"] == ("Status", "Playback")
+    assert blueprint["initial_focus"] == "Favorites"
+    assert blueprint["sections"] == (
+        "Station",
+        "Now Playing",
+        "Search Radio Browser",
+        "Stations",
+        "Saved Stations",
+        "Tune-in Timers",
+        "Recent Events",
+    )
+
+
+def test_station_scout_ui_blueprint_keeps_station_actions_compact() -> None:
+    blueprint = station_scout_ui_blueprint()
+
+    assert blueprint["primary_actions"] == (
+        "Play selected",
+        "Add favorite",
+        "Open website",
+        "Add tune-in timer",
+        "Start tracking",
+        "Stop tracking",
+    )
+
+
+def test_station_scout_ui_blueprint_uses_distinct_accessible_list_names() -> None:
+    blueprint = station_scout_ui_blueprint()
+
+    assert blueprint["list_names"] == (
+        "Station search results",
+        "Favorite stations",
+        "Recently played stations",
+        "Tune-in timers",
+    )

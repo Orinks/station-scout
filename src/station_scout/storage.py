@@ -24,6 +24,7 @@ class AppState:
     favorites: list[Station] = field(default_factory=list)
     recents: list[Station] = field(default_factory=list)
     timers: list[TuneTimer] = field(default_factory=list)
+    volume: float = 1.0
     track_log_folder: str = ""
     lastfm_enabled: bool = False
     lastfm_scrobble_enabled: bool = True
@@ -81,6 +82,7 @@ class SettingsStore:
             favorites=_stations(payload.get("favorites")),
             recents=_stations(payload.get("recents")),
             timers=_timers(payload.get("timers")),
+            volume=_volume(payload.get("volume")),
             track_log_folder=str(payload.get("track_log_folder") or ""),
             lastfm_enabled=bool(payload.get("lastfm_enabled", False)),
             lastfm_scrobble_enabled=bool(payload.get("lastfm_scrobble_enabled", True)),
@@ -102,6 +104,7 @@ class SettingsStore:
             "favorites": [station.to_json() for station in state.favorites],
             "recents": [station.to_json() for station in state.recents],
             "timers": [timer.to_json() for timer in state.timers],
+            "volume": _volume(state.volume),
             "track_log_folder": state.track_log_folder,
             "lastfm_enabled": state.lastfm_enabled,
             "lastfm_scrobble_enabled": state.lastfm_scrobble_enabled,
@@ -153,3 +156,10 @@ def _timers(value: object) -> list[TuneTimer]:
     if not isinstance(value, list):
         return []
     return [TuneTimer.from_json(item) for item in value if isinstance(item, dict)]
+
+
+def _volume(value: object) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return 1.0

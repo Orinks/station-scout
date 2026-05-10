@@ -10,6 +10,7 @@ def test_store_round_trips_state(tmp_path: Path) -> None:
         favorites=[station],
         recents=[station],
         timers=[TuneTimer("abc", "Example", "18:00")],
+        volume=0.35,
         track_log_folder=str(tmp_path / "logs"),
         lastfm_enabled=True,
         lastfm_scrobble_enabled=False,
@@ -29,6 +30,7 @@ def test_store_round_trips_state(tmp_path: Path) -> None:
     assert loaded.favorites == [station]
     assert loaded.recents == [station]
     assert loaded.timers == [TuneTimer("abc", "Example", "18:00")]
+    assert loaded.volume == 0.35
     assert loaded.track_log_folder == str(tmp_path / "logs")
     assert loaded.lastfm_enabled
     assert not loaded.lastfm_scrobble_enabled
@@ -96,6 +98,30 @@ def test_lastfm_scrobbling_defaults_on_for_loaded_state(tmp_path: Path) -> None:
     loaded = store.load()
 
     assert loaded.lastfm_scrobble_enabled
+
+
+def test_volume_defaults_and_clamps_loaded_values(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text('{"volume": 1.75}', encoding="utf-8")
+    store = SettingsStore(settings_path, credentials=FakeCredentialStore())
+
+    assert store.load().volume == 1.0
+
+    settings_path.write_text('{"volume": -0.25}', encoding="utf-8")
+
+    assert store.load().volume == 0.0
+
+
+def test_volume_defaults_to_full_when_missing_or_invalid(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text("{}", encoding="utf-8")
+    store = SettingsStore(settings_path, credentials=FakeCredentialStore())
+
+    assert store.load().volume == 1.0
+
+    settings_path.write_text('{"volume": "loud"}', encoding="utf-8")
+
+    assert store.load().volume == 1.0
 
 
 class FakeCredentialStore:

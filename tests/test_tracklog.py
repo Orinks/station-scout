@@ -1,7 +1,7 @@
 import datetime as dt
 
 from station_scout.models import Station
-from station_scout.tracklog import TrackEntry, TrackSessionLog, parse_stream_title
+from station_scout.tracklog import TrackEntry, TrackSessionLog, _extract_stream_title, parse_stream_title
 
 
 def test_parse_artist_title_stream_title() -> None:
@@ -32,6 +32,18 @@ def test_parse_artist_title_from_provider_metadata_blob() -> None:
     assert entry.display_line() == "Justin Bieber - Yukon"
 
 
+def test_parse_title_and_artist_from_attribute_metadata_blob() -> None:
+    entry = parse_stream_title(
+        'title="Havana",artist="CAMILA CABELLO - YOUNG THUG",url="song_spot="F" '
+        'MediaBaseId="0" itunesTrackId="0" amgTrackId="-1" amgArtistId="0"'
+    )
+
+    assert entry is not None
+    assert entry.artist == "CAMILA CABELLO - YOUNG THUG"
+    assert entry.title == "Havana"
+    assert entry.display_line() == "CAMILA CABELLO - YOUNG THUG - Havana"
+
+
 def test_parse_marks_non_music_provider_metadata_uncertain() -> None:
     entry = parse_stream_title(
         'Philly\'s #1 Hit Music Station - text="Q102" song_spot="T" MediaBaseId="0"'
@@ -42,12 +54,31 @@ def test_parse_marks_non_music_provider_metadata_uncertain() -> None:
     assert entry.display_line() == "Philly's #1 Hit Music Station - Q102 ?"
 
 
+def test_extract_stream_title_keeps_apostrophes_inside_metadata() -> None:
+    metadata = (
+        'StreamTitle=\'Philly\'s #1 Hit Music Station - text="Q102" song_spot="T" '
+        'MediaBaseId="0"\';'
+    )
+
+    assert _extract_stream_title(metadata) == (
+        'Philly\'s #1 Hit Music Station - text="Q102" song_spot="T" MediaBaseId="0"'
+    )
+
+
 def test_unknown_or_bad_metadata_is_kept_but_marked_uncertain() -> None:
     entry = parse_stream_title("Transmission FM Station ID")
 
     assert entry is not None
     assert entry.uncertain
     assert entry.display_line() == "Transmission FM Station ID ?"
+
+
+def test_bare_station_identifier_is_ignored() -> None:
+    assert parse_stream_title("PST") is None
+
+
+def test_single_letter_metadata_token_is_ignored() -> None:
+    assert parse_stream_title("T") is None
 
 
 def test_show_session_file_omits_station_name(tmp_path) -> None:

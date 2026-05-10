@@ -29,6 +29,9 @@ LINUX_SYSTEM_DLL_EXCLUDES = (
 SOUND_LIB_NATIVE_EXTS = {".dll", ".dylib", ".so"}
 SOUND_LIB_ARCH_DIR = "x64"
 
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 
 def get_version() -> str:
     with (ROOT / "pyproject.toml").open("rb") as handle:
@@ -144,17 +147,17 @@ def build_nuitka_command(*, output_dir: Path, build_tag: str | None, assume_plat
         f"--product-version={numeric_version}",
         f"--file-version={numeric_version}",
         f"--company-name=Orinks{f' ({build_tag})' if build_tag else ''}",
-        _repo_path(ROOT / "installer" / "nuitka_entry.py"),
     ]
     for optional_package in ("desktop_notifier", "toasted"):
         if importlib.util.find_spec(optional_package):
-            command.insert(-1, f"--include-package-data={optional_package}")
+            command.append(f"--include-package-data={optional_package}")
     if system == "Windows":
         command.append("--windows-console-mode=disable")
     elif system == "Darwin":
         command.append(f"--macos-app-name={DISPLAY_NAME}")
     elif system == "Linux":
         command.extend(f"--noinclude-dlls={pattern}" for pattern in LINUX_SYSTEM_DLL_EXCLUDES)
+    command.append(_repo_path(ROOT / "installer" / "nuitka_entry.py"))
     return command
 
 

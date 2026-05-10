@@ -141,7 +141,7 @@ jobs:
     name: macOS
     needs: prepare
     if: needs.prepare.outputs.should_build == 'true'
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
@@ -369,6 +369,11 @@ jobs:
           else
             echo "Station Scout v${VERSION}." > notes.md
           fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: assets/*
 
       - name: Create release
         if: ${{ inputs.dry_run != true }}

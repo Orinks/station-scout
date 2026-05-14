@@ -7,6 +7,7 @@ from station_scout.app import (
     playback_window_title,
     should_scrobble_lastfm,
     should_show_stream_title,
+    spotify_playlist_unavailable_message,
     spotify_playlist_tracks,
     station_scout_ui_blueprint,
 )
@@ -72,6 +73,34 @@ def test_spotify_playlist_tracks_filters_uncertain_and_duplicates() -> None:
     ]
 
     assert spotify_playlist_tracks(entries) == [("Artist", "Song")]
+
+
+def test_spotify_playlist_export_requires_config() -> None:
+    state = AppState(spotify_enabled=True, spotify_access_token="access", spotify_refresh_token="refresh")
+
+    assert spotify_playlist_unavailable_message(state, has_config=False, has_tracks=True) == (
+        "Station Scout is missing its Spotify client ID."
+    )
+
+
+def test_spotify_playlist_export_requires_connection() -> None:
+    assert spotify_playlist_unavailable_message(AppState(), has_config=True, has_tracks=True) == (
+        "Connect Spotify in Settings before creating playlists."
+    )
+
+
+def test_spotify_playlist_export_requires_refreshable_credentials() -> None:
+    state = AppState(spotify_enabled=True)
+
+    assert spotify_playlist_unavailable_message(state, has_config=True, has_tracks=True) == (
+        "Reconnect Spotify in Settings before creating playlists."
+    )
+
+
+def test_spotify_playlist_export_allows_refresh_token_without_access_token() -> None:
+    state = AppState(spotify_enabled=True, spotify_refresh_token="refresh")
+
+    assert spotify_playlist_unavailable_message(state, has_config=True, has_tracks=True) == ""
 
 
 def test_uncertain_station_id_metadata_does_not_replace_now_playing() -> None:

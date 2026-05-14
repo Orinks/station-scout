@@ -26,7 +26,7 @@ from station_scout.cast import (
     toggle_sonos_pause,
 )
 from station_scout.direct_streams import station_from_direct_url, streamurl_search_url
-from station_scout.integrations_config import lastfm_app_config, spotify_app_config
+from station_scout.integrations_config import SpotifyAppConfig, lastfm_app_config, spotify_app_config
 from station_scout.lastfm import LastFmClient, LastFmError, LastFmProxyClient, LastFmScrobbleCache
 from station_scout.models import Station, TuneTimer
 from station_scout.notifications import create_notifier
@@ -129,6 +129,28 @@ def spotify_playlist_tracks(entries: list[TrackEntry]) -> list[tuple[str, str]]:
         seen.add(key)
         tracks.append((entry.artist, entry.title))
     return tracks
+
+
+def spotify_playlist_unavailable_message(
+    state: AppState,
+    *,
+    has_config: bool,
+    has_tracks: bool,
+) -> str:
+    if not has_tracks:
+        return "No Spotify-ready artist/title tracks were tracked."
+    if not has_config:
+        return "Station Scout is missing its Spotify client ID."
+    if not state.spotify_enabled:
+        return "Connect Spotify in Settings before creating playlists."
+    if not state.spotify_access_token and not state.spotify_refresh_token:
+        return "Reconnect Spotify in Settings before creating playlists."
+    return ""
+
+
+def _spotify_auth_http_error(exc: requests.HTTPError) -> bool:
+    response = exc.response
+    return response is not None and response.status_code in {400, 401}
 
 
 class StationScoutFrame(wx.Frame):
@@ -954,7 +976,19 @@ class StationScoutFrame(wx.Frame):
             self._notify("Playlist tracking stopped", session.show_name or session.station.name)
         self.track_session = None
         self.track_stop_at = ""
-        if session and self.state.spotify_enabled and spotify_playlist_tracks(session.entries):
+        if not session:
+            return
+        tracks = spotify_playlist_tracks(session.entries)
+        if self.state.spotify_enabled and tracks:
+            config = spotify_app_config()
+            unavailable_message = spotify_playlist_unavailable_message(
+                self.state,
+                has_config=config is not None,
+                has_tracks=bool(tracks),
+            )
+            if unavailable_message:
+                self._set_status(unavailable_message)
+                return
             prompt = wx.MessageDialog(
                 self,
                 "Create a private Spotify playlist from this tracking session?",
@@ -966,7 +1000,7 @@ class StationScoutFrame(wx.Frame):
             finally:
                 prompt.Destroy()
             if create_playlist:
-                self._create_spotify_playlist_from_session(session)
+                self._create_spotify_playlist_from_session(session, config=config, tracks=tracks)
 
     def _on_choose_log_folder(self, _event: wx.Event) -> None:
         dialog = wx.DirDialog(
@@ -1158,30 +1192,68 @@ class StationScoutFrame(wx.Frame):
         except (LastFmError, requests.RequestException):
             self.lastfm_cache.append(entry)
 
-    def _create_spotify_playlist_from_session(self, session: TrackSessionLog) -> None:
-        config = spotify_app_config()
-        tracks = spotify_playlist_tracks(session.entries)
-        if not config or not self.state.spotify_enabled or not self.state.spotify_access_token:
-            return
-        if not tracks:
-            self._set_status("No Spotify-ready artist/title tracks were tracked.")
+    def _create_spotify_playlist_from_session(
+        self,
+        session: TrackSessionLog,
+        *,
+        config: SpotifyAppConfig | None = None,
+        tracks: list[tuple[str, str]] | None = None,
+    ) -> None:
+        config = config or spotify_app_config()
+        tracks = tracks if tracks is not None else spotify_playlist_tracks(session.entries)
+        unavailable_message = spotify_playlist_unavailable_message(
+            self.state,
+            has_config=config is not None,
+            has_tracks=bool(tracks),
+        )
+        if unavailable_message:
+            self._set_status(unavailable_message)
             return
         name = session.show_name or f"{session.station.name} {session.started_at:%Y-%m-%d}"
         client = SpotifyClient(client_id=config.client_id, redirect_uri=config.redirect_uri)
 
-        def work() -> SpotifyPlaylistResult:
-            if self.state.spotify_refresh_token and self.state.spotify_token_expires_at <= int(time.time()) + 60:
+        def refresh_token() -> None:
+            try:
                 token_set = client.refresh_access_token(refresh_token=self.state.spotify_refresh_token)
-                self.state.spotify_access_token = token_set.access_token
-                self.state.spotify_refresh_token = token_set.refresh_token
-                self.state.spotify_token_expires_at = token_set.expires_at
-                self.store.save(self.state)
+            except requests.HTTPError as exc:
+                if _spotify_auth_http_error(exc):
+                    raise RuntimeError(
+                        "Spotify authorization expired. Reconnect Spotify in Settings."
+                    ) from exc
+                raise
+            self.state.spotify_access_token = token_set.access_token
+            self.state.spotify_refresh_token = token_set.refresh_token
+            self.state.spotify_token_expires_at = token_set.expires_at
+            self.store.save(self.state)
+
+        def create_playlist() -> SpotifyPlaylistResult:
             return client.create_playlist_from_tracks(
                 access_token=self.state.spotify_access_token,
                 name=name,
                 tracks=tracks,
                 public=False,
             )
+
+        def work() -> SpotifyPlaylistResult:
+            refreshed = False
+            should_refresh = self.state.spotify_refresh_token and (
+                not self.state.spotify_access_token
+                or self.state.spotify_token_expires_at <= int(time.time()) + 60
+            )
+            if should_refresh:
+                refresh_token()
+                refreshed = True
+            try:
+                return create_playlist()
+            except requests.HTTPError as exc:
+                if self.state.spotify_refresh_token and not refreshed and _spotify_auth_http_error(exc):
+                    refresh_token()
+                    return create_playlist()
+                if _spotify_auth_http_error(exc):
+                    raise RuntimeError(
+                        "Spotify authorization expired. Reconnect Spotify in Settings."
+                    ) from exc
+                raise
 
         def on_success(result: object) -> None:
             playlist = result if isinstance(result, SpotifyPlaylistResult) else None

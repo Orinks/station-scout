@@ -1,4 +1,4 @@
-from station_scout.models import Station, TuneTimer
+from station_scout.models import BrowseFacet, Station, TuneTimer
 
 
 def test_station_normalizes_api_payload() -> None:
@@ -37,3 +37,43 @@ def test_direct_stream_station_has_stable_id_and_source() -> None:
     assert station.stationuuid.startswith("direct-")
     assert station.source == "StreamURL.link"
     assert "StreamURL.link" in station.quality_label()
+
+
+def test_browse_facet_normalizes_api_payload_and_query_value() -> None:
+    facet = BrowseFacet.from_api(
+        "location",
+        {"name": "United States", "stationcount": "123", "iso_3166_1": "US"},
+    )
+
+    assert facet.name == "United States"
+    assert facet.station_count == 123
+    assert facet.query_value() == "US"
+
+
+def test_station_discovery_quality_scores_reliable_popular_streams_higher() -> None:
+    strong = Station.from_api(
+        {
+            "stationuuid": "good",
+            "name": "Good",
+            "url": "https://good.test/live",
+            "lastcheckok": 1,
+            "bitrate": 320,
+            "codec": "AAC",
+            "clicktrend": 3,
+            "votes": 250,
+        }
+    )
+    weak = Station.from_api(
+        {
+            "stationuuid": "weak",
+            "name": "Weak",
+            "url": "https://weak.test/live",
+            "lastcheckok": 1,
+            "bitrate": 64,
+            "codec": "MP3",
+            "clicktrend": 0,
+        }
+    )
+
+    assert strong.discovery_quality_score() > weak.discovery_quality_score()
+    assert strong.discovery_quality_label().startswith("excellent discovery match")

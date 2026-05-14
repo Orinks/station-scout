@@ -96,6 +96,7 @@ def test_station_scout_ui_blueprint_adapts_accessiweather_sections() -> None:
         "Station",
         "Now Playing",
         "Search Radio Browser",
+        "Browse Stations",
         "Stations",
         "Saved Stations",
         "Tune-in Timers",
@@ -121,6 +122,7 @@ def test_station_scout_ui_blueprint_uses_distinct_accessible_list_names() -> Non
 
     assert blueprint["list_names"] == (
         "Station search results",
+        "Browse choices",
         "Favorite stations",
         "Recently played stations",
         "Tune-in timers",

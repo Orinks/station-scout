@@ -2,6 +2,33 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+from typing import Literal
+
+
+BrowseFacetKind = Literal["genre", "location", "language"]
+
+
+@dataclass(frozen=True, slots=True)
+class BrowseFacet:
+    kind: BrowseFacetKind
+    name: str
+    station_count: int = 0
+    code: str = ""
+
+    @classmethod
+    def from_api(cls, kind: BrowseFacetKind, payload: dict[str, object]) -> "BrowseFacet":
+        code_key = "iso_3166_1" if kind == "location" else "iso_639"
+        return cls(
+            kind=kind,
+            name=str(payload.get("name") or ""),
+            station_count=_int(payload.get("stationcount")),
+            code=str(payload.get(code_key) or ""),
+        )
+
+    def query_value(self) -> str:
+        if self.kind == "location" and self.code:
+            return self.code
+        return self.name
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +111,54 @@ class Station:
         if self.source != "Radio Browser":
             bits.append(self.source)
         return ", ".join(bits) or "stream details unavailable"
+
+    def discovery_quality_score(self) -> int:
+        score = 0
+        if self.lastcheckok:
+            score += 30
+
+        if self.bitrate >= 320:
+            score += 30
+        elif self.bitrate >= 192:
+            score += 25
+        elif self.bitrate >= 128:
+            score += 20
+        elif self.bitrate >= 64:
+            score += 10
+        elif self.bitrate > 0:
+            score += 5
+
+        codec = self.codec.casefold().replace(" ", "")
+        if codec in {"flac", "alac"}:
+            score += 20
+        elif codec in {"opus", "aac", "aac+", "heaac", "vorbis", "ogg"}:
+            score += 15
+        elif codec == "mp3":
+            score += 10
+        elif codec:
+            score += 5
+
+        if self.hls:
+            score += 5
+        if self.clicktrend > 0:
+            score += min(15, self.clicktrend * 3)
+        elif self.clickcount > 0:
+            score += min(10, self.clickcount // 100)
+        if self.votes > 0:
+            score += min(5, self.votes // 100)
+        return min(score, 100)
+
+    def discovery_quality_label(self) -> str:
+        score = self.discovery_quality_score()
+        if score >= 80:
+            tier = "excellent"
+        elif score >= 60:
+            tier = "good"
+        elif score >= 40:
+            tier = "fair"
+        else:
+            tier = "limited"
+        return f"{tier} discovery match, {score}/100, {self.quality_label()}"
 
     def to_json(self) -> dict[str, object]:
         return {

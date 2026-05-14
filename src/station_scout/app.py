@@ -28,7 +28,7 @@ from station_scout.cast import (
 from station_scout.direct_streams import station_from_direct_url, streamurl_search_url
 from station_scout.integrations_config import lastfm_app_config, spotify_app_config
 from station_scout.lastfm import LastFmClient, LastFmError, LastFmProxyClient, LastFmScrobbleCache
-from station_scout.models import Station, TuneTimer
+from station_scout.models import BrowseFacet, BrowseFacetKind, Station, TuneTimer
 from station_scout.notifications import create_notifier
 from station_scout.player import RadioPlayer
 from station_scout.radio_browser import RadioBrowserClient, RadioBrowserError
@@ -39,6 +39,11 @@ from station_scout.tracklog import IcyMetadataReader, TrackEntry, TrackSessionLo
 
 
 APP_TITLE = "Station Scout"
+BROWSE_KIND_CHOICES: tuple[tuple[str, BrowseFacetKind], ...] = (
+    ("Genre", "genre"),
+    ("Location", "location"),
+    ("Language", "language"),
+)
 
 
 def station_scout_ui_blueprint() -> dict[str, tuple[str, ...] | str]:
@@ -51,6 +56,7 @@ def station_scout_ui_blueprint() -> dict[str, tuple[str, ...] | str]:
             "Station",
             "Now Playing",
             "Search Radio Browser",
+            "Browse Stations",
             "Stations",
             "Saved Stations",
             "Tune-in Timers",
@@ -66,6 +72,7 @@ def station_scout_ui_blueprint() -> dict[str, tuple[str, ...] | str]:
         ),
         "list_names": (
             "Station search results",
+            "Browse choices",
             "Favorite stations",
             "Recently played stations",
             "Tune-in timers",
@@ -138,6 +145,7 @@ class StationScoutFrame(wx.Frame):
         self.store = SettingsStore()
         self.state = self.store.load()
         self.results: list[Station] = []
+        self.browse_facets: list[BrowseFacet] = []
         self.current_station: Station | None = None
         self.timer_fired_today: set[tuple[str, str, str]] = set()
         self.notifier = create_notifier(parent=self)
@@ -263,6 +271,27 @@ class StationScoutFrame(wx.Frame):
             search_buttons.Add(button, 0, wx.RIGHT, 8)
         search_box.Add(search_buttons, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
 
+        browse_box = wx.StaticBoxSizer(wx.VERTICAL, panel, "Browse Stations")
+        browse_row = wx.BoxSizer(wx.HORIZONTAL)
+        browse_row.Add(wx.StaticText(panel, label="Browse by"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.browse_kind_choice = wx.Choice(
+            panel,
+            choices=[label for label, _kind in BROWSE_KIND_CHOICES],
+            name="Browse category",
+        )
+        self.browse_kind_choice.SetSelection(0)
+        _describe_control(self.browse_kind_choice, "Browse category")
+        browse_row.Add(self.browse_kind_choice, 0, wx.RIGHT, 8)
+        self.load_browse_button = wx.Button(panel, label="Load choices")
+        browse_row.Add(self.load_browse_button, 0, wx.RIGHT, 8)
+        browse_row.Add(wx.StaticText(panel, label="Choice"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        self.browse_facet_choice = wx.Choice(panel, name="Browse choices")
+        _describe_control(self.browse_facet_choice, "Browse choices")
+        browse_row.Add(self.browse_facet_choice, 1, wx.EXPAND | wx.RIGHT, 8)
+        self.browse_selected_button = wx.Button(panel, label="Browse selected")
+        browse_row.Add(self.browse_selected_button, 0)
+        browse_box.Add(browse_row, 0, wx.EXPAND | wx.ALL, 8)
+
         actions_box = wx.StaticBoxSizer(wx.HORIZONTAL, panel, "Station actions")
         self.play_button = wx.Button(panel, label="Play selected")
         self.favorite_button = wx.Button(panel, label="Add favorite")
@@ -332,6 +361,7 @@ class StationScoutFrame(wx.Frame):
         root.Add(station_row, 0, wx.EXPAND | wx.ALL, 10)
         root.Add(now_playing_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         root.Add(search_box, 0, wx.EXPAND | wx.ALL, 10)
+        root.Add(browse_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         root.Add(actions_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         root.Add(body, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
         panel.SetSizer(root)
@@ -353,6 +383,8 @@ class StationScoutFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _event: self.stop_tracking(), id=self.ID_STOP_TRACKING)
         self.Bind(wx.EVT_BUTTON, self._on_search, self.search_button)
         self.Bind(wx.EVT_BUTTON, self._on_direct_stream_fallback, self.direct_stream_button)
+        self.Bind(wx.EVT_BUTTON, self._on_load_browse_facets, self.load_browse_button)
+        self.Bind(wx.EVT_BUTTON, self._on_browse_selected, self.browse_selected_button)
         self.Bind(wx.EVT_BUTTON, lambda _event: self._refresh_saved_lists(), self.refresh_saved_button)
         self.Bind(wx.EVT_BUTTON, self._on_playback_button, self.play_button)
         self.Bind(wx.EVT_BUTTON, self._on_add_favorite, self.favorite_button)
@@ -427,7 +459,65 @@ class StationScoutFrame(wx.Frame):
             self._show_error,
         )
 
-    def _show_results(self, stations: list[Station]) -> None:
+    def _selected_browse_kind(self) -> BrowseFacetKind:
+        selection = self.browse_kind_choice.GetSelection()
+        if selection == wx.NOT_FOUND:
+            return "genre"
+        return BROWSE_KIND_CHOICES[selection][1]
+
+    def _on_load_browse_facets(self, _event: wx.Event) -> None:
+        kind = self._selected_browse_kind()
+        self._set_status(f"Loading {kind} browse choices...")
+        self.load_browse_button.Disable()
+        self._run_background(
+            lambda: self.client.browse_facets(kind),
+            self._show_browse_facets,
+            self._show_error,
+        )
+
+    def _show_browse_facets(self, result: object) -> None:
+        self.load_browse_button.Enable()
+        self.browse_facets = (
+            [facet for facet in result if isinstance(facet, BrowseFacet)]
+            if isinstance(result, list)
+            else []
+        )
+        labels = [
+            f"{facet.name} ({facet.station_count} stations)"
+            if facet.station_count
+            else facet.name
+            for facet in self.browse_facets
+        ]
+        self.browse_facet_choice.Set(labels)
+        if self.browse_facets:
+            self.browse_facet_choice.SetSelection(0)
+            self.browse_facet_choice.SetFocus()
+        self._set_status(f"{len(self.browse_facets)} browse choices loaded.")
+
+    def _on_browse_selected(self, _event: wx.Event) -> None:
+        selection = self.browse_facet_choice.GetSelection()
+        if selection == wx.NOT_FOUND or selection >= len(self.browse_facets):
+            self._set_status("Load and choose a browse option first.")
+            return
+        facet = self.browse_facets[selection]
+        self._set_status(f"Browsing {facet.name} stations...")
+        self.browse_selected_button.Disable()
+        self._run_background(
+            lambda: self.client.browse_stations(facet),
+            self._show_browse_results,
+            self._show_error,
+        )
+
+    def _show_browse_results(self, result: object) -> None:
+        self.browse_selected_button.Enable()
+        stations = (
+            [station for station in result if isinstance(station, Station)]
+            if isinstance(result, list)
+            else []
+        )
+        self._show_results(stations, discovery_quality=True)
+
+    def _show_results(self, stations: list[Station], *, discovery_quality: bool = False) -> None:
         self.search_button.Enable()
         self.results = stations
         self.station_list.DeleteAllItems()
@@ -435,7 +525,10 @@ class StationScoutFrame(wx.Frame):
             index = self.station_list.InsertItem(self.station_list.GetItemCount(), station.name)
             self.station_list.SetItem(index, 1, station.country or station.countrycode)
             self.station_list.SetItem(index, 2, station.language)
-            self.station_list.SetItem(index, 3, station.quality_label())
+            quality_label = (
+                station.discovery_quality_label() if discovery_quality else station.quality_label()
+            )
+            self.station_list.SetItem(index, 3, quality_label)
             self.station_list.SetItem(index, 4, station.source)
         if stations:
             self.station_list.Select(0)
@@ -1200,6 +1293,10 @@ class StationScoutFrame(wx.Frame):
 
     def _show_error(self, exc: BaseException) -> None:
         self.search_button.Enable()
+        if hasattr(self, "load_browse_button"):
+            self.load_browse_button.Enable()
+        if hasattr(self, "browse_selected_button"):
+            self.browse_selected_button.Enable()
         self._set_status(str(exc))
         self._notify("Station Scout error", str(exc))
 

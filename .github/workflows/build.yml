@@ -362,12 +362,27 @@ jobs:
           done
 
           cd assets && sha256sum * > checksums.txt 2>/dev/null || true
+
           cd ..
 
+          # Generate release notes from curated CHANGELOG.md entries.
           if [ "$IS_NIGHTLY" = "true" ]; then
-            echo "Station Scout nightly build." > notes.md
+            LAST_TAG=$(git tag --list "nightly-*" --sort=-version:refname | head -1)
+            if [ -n "$LAST_TAG" ]; then
+              gh release view "$LAST_TAG" --json body -q .body > previous-notes.md || true
+              python scripts/changelog_tools.py notes \
+                --kind nightly \
+                --previous-tag "$LAST_TAG" \
+                --exclude-notes previous-notes.md \
+                --output notes.md
+            else
+              python scripts/changelog_tools.py notes --kind nightly --output notes.md
+            fi
           else
-            echo "Station Scout v${VERSION}." > notes.md
+            python scripts/changelog_tools.py notes \
+              --kind stable \
+              --version "$TAG" \
+              --output notes.md
           fi
 
       - uses: actions/upload-artifact@v7

@@ -82,6 +82,32 @@ jobs:
         if: matrix.primary
         run: python -m ruff check .
 
+      - name: Check CHANGELOG entry
+        if: matrix.primary
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="origin/${{ github.base_ref }}"
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}:${BASE}" || true
+            echo "PR detected - checking changelog entries against $BASE"
+          elif [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            BASE="${{ github.event.before }}"
+            git fetch --no-tags origin "$BASE" || true
+            echo "Push detected - checking changelog entries against $BASE"
+          else
+            BASE="HEAD~1"
+            echo "Manual run detected - checking changelog entries against $BASE"
+          fi
+
+          if ! python scripts/changelog_tools.py check --base "$BASE" --head HEAD; then
+            {
+              echo "### CHANGELOG gate"
+              echo
+              echo "User-facing changes need a curated \`CHANGELOG.md\` entry under \`## [Unreleased]\`."
+              echo "This keeps nightly and stable release notes based on product wording instead of PR titles."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
       - name: Test
         run: python -m pytest
 

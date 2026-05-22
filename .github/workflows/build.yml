@@ -15,6 +15,7 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
@@ -328,11 +329,10 @@ jobs:
           ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
-        continue-on-error: true
+      - name: Download artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir dist
 
       - name: Prepare release
         env:
@@ -343,8 +343,7 @@ jobs:
           mkdir -p assets
           TIMESTAMP=$(date -u +%Y%m%d)
 
-          for f in dist/*.exe dist/*.zip dist/*.tar.gz; do
-            [ -f "$f" ] || continue
+          while IFS= read -r f; do
             name=$(basename "$f")
             if [ "$IS_NIGHTLY" = "true" ]; then
               case "$name" in
@@ -361,7 +360,7 @@ jobs:
                 *Linux*.tar.gz) mv "$f" "assets/StationScout-${VERSION}-linux.tar.gz" ;;
               esac
             fi
-          done
+          done < <(find dist -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.tar.gz' \))
 
           cd assets && sha256sum * > checksums.txt 2>/dev/null || true
           cd ..

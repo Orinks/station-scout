@@ -206,7 +206,7 @@ fn runtime_searches_podcasts_with_saved_podcast_index_credentials() {
 }
 
 #[test]
-fn runtime_exposes_python_radio_actions_for_search_favorites_recents_and_timers() {
+fn runtime_exposes_radio_actions_for_search_favorites_recents_and_timers() {
     let dir = tempfile::tempdir().unwrap();
     let settings_path = dir.path().join("Station Scout").join("station_scout.json");
     let mut runtime = StationScoutRuntime::open(
@@ -249,7 +249,7 @@ fn runtime_exposes_python_radio_actions_for_search_favorites_recents_and_timers(
 }
 
 #[test]
-fn runtime_exposes_python_radio_browse_actions() {
+fn runtime_exposes_radio_browse_actions() {
     let dir = tempfile::tempdir().unwrap();
     let settings_path = dir.path().join("Station Scout").join("station_scout.json");
     let runtime =

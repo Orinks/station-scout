@@ -1,3 +1,7 @@
+use gstreamer::prelude::{ElementExt, ObjectExt};
+
+use crate::models::Station;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlaybackState {
     Stopped,
@@ -7,57 +11,160 @@ pub enum PlaybackState {
 
 pub trait RadioPlaybackBackend {
     fn play(&mut self, url: &str, volume: f64) -> Result<(), String>;
+    fn set_volume(&mut self, _volume: f64) -> Result<(), String> {
+        Ok(())
+    }
     fn pause(&mut self) -> Result<bool, String>;
     fn resume(&mut self) -> Result<bool, String>;
     fn stop(&mut self);
 }
 
-pub trait MediaControl {
-    fn load_uri(&mut self, uri: &str) -> bool;
-    fn set_volume(&mut self, volume: f64) -> bool;
-    fn play(&mut self) -> bool;
-    fn pause(&mut self) -> bool;
-    fn stop(&mut self) -> bool;
+pub trait UriPlaybackControl {
+    fn set_uri(&mut self, uri: &str) -> Result<(), String>;
+    fn set_volume(&mut self, volume: f64) -> Result<(), String>;
+    fn play(&mut self) -> Result<(), String>;
+    fn pause(&mut self) -> Result<(), String>;
+    fn stop(&mut self);
 }
 
-pub struct MediaControlRadioBackend<T> {
+pub fn play_station_stream(player: &mut RadioPlayer, station: &Station) -> Result<String, String> {
+    play_named_stream(
+        player,
+        &station.name,
+        Some(&station.url_resolved),
+        "Selected station has no playable stream URL.",
+    )
+}
+
+pub fn play_podcast_episode_stream(
+    player: &mut RadioPlayer,
+    title: Option<&str>,
+    enclosure_url: Option<&str>,
+) -> Result<String, String> {
+    play_named_stream(
+        player,
+        title.unwrap_or("selected episode"),
+        enclosure_url,
+        "Selected episode has no playable enclosure URL.",
+    )
+}
+
+fn play_named_stream(
+    player: &mut RadioPlayer,
+    name: &str,
+    url: Option<&str>,
+    empty_url_message: &str,
+) -> Result<String, String> {
+    let url = url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| empty_url_message.to_string())?;
+    if player.play(url) {
+        Ok(format!("Playing {}.", display_stream_name(name)))
+    } else {
+        Err(player
+            .last_error()
+            .unwrap_or("Failed to start playback.")
+            .to_string())
+    }
+}
+
+fn display_stream_name(name: &str) -> String {
+    let normalized = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        "selected episode".to_string()
+    } else {
+        normalized
+    }
+}
+
+pub struct GStreamerRadioBackend<T> {
     control: T,
 }
 
-impl<T> MediaControlRadioBackend<T>
+impl<T> GStreamerRadioBackend<T>
 where
-    T: MediaControl,
+    T: UriPlaybackControl,
 {
     pub fn new(control: T) -> Self {
         Self { control }
     }
 }
 
-impl<T> RadioPlaybackBackend for MediaControlRadioBackend<T>
+impl<T> RadioPlaybackBackend for GStreamerRadioBackend<T>
 where
-    T: MediaControl,
+    T: UriPlaybackControl,
 {
     fn play(&mut self, url: &str, volume: f64) -> Result<(), String> {
-        if !self.control.load_uri(url) {
-            return Err(format!("Failed to load radio stream: {url}"));
-        }
-        self.control.set_volume(volume);
-        if !self.control.play() {
-            return Err("Failed to start radio stream playback.".to_string());
-        }
-        Ok(())
+        self.control.set_uri(url)?;
+        self.control.set_volume(volume)?;
+        self.control.play()
+    }
+
+    fn set_volume(&mut self, volume: f64) -> Result<(), String> {
+        self.control.set_volume(volume)
     }
 
     fn pause(&mut self) -> Result<bool, String> {
-        Ok(self.control.pause())
+        self.control.pause().map(|()| true)
     }
 
     fn resume(&mut self) -> Result<bool, String> {
-        Ok(self.control.play())
+        self.control.play().map(|()| true)
     }
 
     fn stop(&mut self) {
         self.control.stop();
+    }
+}
+
+pub fn gstreamer_radio_player() -> Result<RadioPlayer, String> {
+    Ok(RadioPlayer::with_backend(Box::new(
+        GStreamerRadioBackend::new(GStreamerUriPlaybackControl::new()?),
+    )))
+}
+
+struct GStreamerUriPlaybackControl {
+    player: gstreamer::Element,
+}
+
+impl GStreamerUriPlaybackControl {
+    fn new() -> Result<Self, String> {
+        gstreamer::init().map_err(|error| format!("Failed to initialize GStreamer: {error}"))?;
+        let player = gstreamer::ElementFactory::make("playbin")
+            .build()
+            .map_err(|error| format!("Failed to create GStreamer playbin: {error}"))?;
+        Ok(Self { player })
+    }
+}
+
+impl UriPlaybackControl for GStreamerUriPlaybackControl {
+    fn set_uri(&mut self, uri: &str) -> Result<(), String> {
+        self.player.set_property("uri", uri);
+        Ok(())
+    }
+
+    fn set_volume(&mut self, volume: f64) -> Result<(), String> {
+        self.player.set_property("volume", volume.clamp(0.0, 1.0));
+        Ok(())
+    }
+
+    fn play(&mut self) -> Result<(), String> {
+        self.player
+            .set_state(gstreamer::State::Playing)
+            .map(|_| ())
+            .map_err(|error| format!("Failed to start GStreamer playback: {error}"))
+    }
+
+    fn pause(&mut self) -> Result<(), String> {
+        self.player
+            .set_state(gstreamer::State::Paused)
+            .map(|_| ())
+            .map_err(|error| format!("Failed to pause GStreamer playback: {error}"))
+    }
+
+    fn stop(&mut self) {
+        let _ = self.player.set_state(gstreamer::State::Null);
     }
 }
 
@@ -202,6 +309,17 @@ impl RadioPlayer {
         } else {
             1.0
         };
+        match self.backend.set_volume(self.volume) {
+            Ok(()) => {
+                self.last_error = None;
+            }
+            Err(error) => {
+                self.last_error = Some(error.clone());
+                if let Some(callback) = self.callbacks.on_error.as_mut() {
+                    callback(&error);
+                }
+            }
+        }
     }
 
     pub fn change_volume(&mut self, delta: f64) -> f64 {

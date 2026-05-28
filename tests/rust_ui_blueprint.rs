@@ -22,7 +22,34 @@ fn ui_blueprint_preserves_station_scout_surfaces_and_accessible_initial_focus() 
     assert!(blueprint.sections.contains(&"Browse Stations"));
     assert!(blueprint.sections.contains(&"Tune-in Timers"));
     assert!(blueprint.primary_actions.contains(&"Play selected"));
+    assert!(!blueprint.primary_actions.contains(&"Play selected station"));
     assert!(blueprint.list_names.contains(&"Station search results"));
+}
+
+#[test]
+fn ui_blueprint_matches_reference_python_menubar() {
+    let blueprint = station_scout_ui_blueprint();
+
+    assert_eq!(blueprint.menu_titles, &["File", "Playback"]);
+    assert_eq!(
+        blueprint.menu_items,
+        &[
+            "Settings",
+            "Quit",
+            "Focus search",
+            "Play selected",
+            "Play/Pause",
+            "Stop",
+            "Volume up",
+            "Volume down",
+            "Play on this computer",
+            "Play on Sonos",
+            "Cast to Chromecast",
+            "Add tune-in timer",
+            "Start tracking",
+            "Stop tracking",
+        ]
+    );
 }
 
 #[test]
@@ -114,15 +141,19 @@ fn ui_blueprint_includes_podcatcher_now_playing_controls() {
         blueprint.notebook_pages,
         &["Subscriptions", "Episodes", "Queue", "Inbox"]
     );
+    assert_eq!(blueprint.now_playing_controls, &["Stop current playback",]);
     assert_eq!(
-        blueprint.now_playing_controls,
+        blueprint.playback_shortcuts,
         &[
-            "Skip back 15 seconds",
-            "Play or pause",
-            "Skip forward 30 seconds",
-            "Previous chapter",
-            "Next chapter",
-            "Announce current position",
+            "Ctrl+F",
+            "Ctrl+P",
+            "Ctrl+Space",
+            "Ctrl+S",
+            "Ctrl+Up",
+            "Ctrl+Down",
+            "Ctrl+T",
+            "Ctrl+Shift+T",
+            "Ctrl+Shift+S",
         ]
     );
     assert_eq!(
@@ -149,19 +180,15 @@ fn ui_blueprint_includes_podcatcher_now_playing_controls() {
 }
 
 #[test]
-fn ui_blueprint_includes_reference_podcatcher_menu_structure() {
+fn ui_blueprint_marks_station_lists_as_enter_activatable() {
     let blueprint = station_scout_ui_blueprint();
 
-    assert_eq!(blueprint.menu_titles, &["File", "Edit", "Help"]);
     assert_eq!(
-        blueprint.menu_items,
+        blueprint.station_activation_lists,
         &[
-            "Import OPML",
-            "Export OPML",
-            "Exit",
-            "Settings",
-            "User manual",
-            "About",
+            "Station search results",
+            "Favorite stations",
+            "Recently played stations",
         ]
     );
 }
@@ -258,7 +285,7 @@ fn ui_blueprint_includes_global_podcast_settings_controls() {
 }
 
 #[test]
-fn ui_blueprint_includes_python_lastfm_settings_controls() {
+fn ui_blueprint_includes_lastfm_settings_controls() {
     let blueprint = station_scout_ui_blueprint();
 
     assert!(blueprint.sections.contains(&"Last.fm"));
@@ -358,9 +385,9 @@ fn ui_startup_state_matches_podcatcher_first_run_behavior() {
         startup_state_for_podcast_subscriptions(false),
         UiStartupState {
             show_first_run_panel: true,
-            show_main_workspace: false,
-            initial_focus: "Search podcasts",
-            status: "No podcast subscriptions yet.",
+            show_main_workspace: true,
+            initial_focus: "Favorite stations",
+            status: "Ready. No podcast subscriptions yet.",
         }
     );
     assert_eq!(

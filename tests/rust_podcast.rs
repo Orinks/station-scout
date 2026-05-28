@@ -246,7 +246,7 @@ fn feed_parser_treats_malformed_xml_as_empty_feed_like_reference_app() {
 }
 
 #[test]
-fn feed_identity_helpers_match_python_reference_behavior() {
+fn feed_identity_helpers_match_ported_reference_behavior() {
     assert_eq!(
         normalize_enclosure_url("https://op3.dev/e/https://media.example.test/show.mp3"),
         Some("https://media.example.test/show.mp3".to_string())

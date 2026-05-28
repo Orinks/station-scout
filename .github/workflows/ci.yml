@@ -16,75 +16,54 @@ defaults:
     shell: bash
 
 env:
-  FORCE_COLOR: "1"
+  CARGO_TERM_COLOR: always
 
 jobs:
   validate:
-    name: Validate (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    name: Validate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            python-version: "3.12"
-            primary: true
-          - os: windows-latest
-            python-version: "3.12"
-            primary: false
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-
       - uses: actions/cache@v5
         with:
           path: |
-            ~/.cache/pip
-            ~\AppData\Local\pip\Cache
-          key: pip-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            pip-${{ runner.os }}-py${{ matrix.python-version }}-
-            pip-${{ runner.os }}-
+            cargo-${{ runner.os }}-
 
-      - name: Install Linux wxPython runtime libraries
+      - name: Install GStreamer (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgtk-3-dev \
-            libnotify-dev \
-            libsdl2-dev \
-            libwebkit2gtk-4.1-dev \
-            freeglut3-dev \
-            xvfb
+          sudo apt-get install -y pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            python -m pip install \
-              -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 \
-              --only-binary wxPython \
-              wxPython
-          else
-            python -m pip install --only-binary wxPython wxPython
-          fi
-          python -m pip install -e . build pytest ruff
+      - name: Install GStreamer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/install-gstreamer-windows.ps1 -InstallDir "$env:RUNNER_TEMP\gstreamer"
 
-      - name: Ruff
-        if: matrix.primary
-        run: python -m ruff check .
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --check
 
       - name: Test
-        run: python -m pytest
+        run: cargo test
 
-      - name: Build package
-        if: matrix.primary
-        run: python -m build
+      - name: Check wxDragon desktop build with GStreamer playback
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cargo check --bin station-scout --features gui

@@ -1,69 +1,54 @@
 # Station Scout
 
-Station Scout is a desktop internet radio explorer built around the public Radio Browser directory.
+Station Scout is an accessible Rust desktop app for internet radio and podcasts. The
+desktop UI is built with wxDragon, with wx controls created in label-before-control order
+for reliable screen reader announcements.
 
-V1 focuses on:
+## Features
 
-- Searching working stations by name, country, language, and tag
-- Opening StreamURL.link searches by station name or call letters, then playing copied direct stream URLs
-- Playing streams with wxPython media controls
-- Favorite stations and recent station history
-- System tray controls for play, stop, show, and quit
-- Desktop notifications
-- Per-station tune-in timers
-- Manual and timer-driven playlist tracking from stream metadata
-
-## Playlist Tracking
-
-Station Scout can track the metadata a station publishes while you listen. Manual tracking and
-timer-driven show tracking write plain text session files under the app settings folder. Show logs
-use one line per song in this format:
-
-```text
-Artist - Title
-```
-
-Station names are intentionally kept out of show logs so the files are easy to read and search.
-Metadata that does not look like a clear artist/title pair is still kept, but marked with `?` so it
-can be reviewed later.
-
-Use **Choose log folder** to save tracking logs outside the app data folder. This is especially useful
-for portable builds where logs should live beside the app or on removable storage.
-
-Last.fm scrobbling is designed as an output adapter over the same session log. Users connect through
-Last.fm in the browser; they do not provide API keys. Station Scout's app-level Last.fm credentials
-come from build/runtime configuration. Radio/DJ-selected tracks are sent with `chosenByUser=0`, and
-uncertain metadata is not scrobbled.
-
-Spotify support follows the browser authorization model too. Station Scout fetches the public
-Spotify client ID from the Station Scout integration proxy by default, then uses Authorization Code
-with PKCE so users authorize their Spotify account in the browser while Station Scout stores user
-tokens for future playlist export. The Spotify app should register the loopback redirect as
-`http://127.0.0.1/spotify/callback`; Station Scout chooses an available local port when the user
-connects. Development builds can override the public app config with
-`STATION_SCOUT_SPOTIFY_CLIENT_ID`, `STATION_SCOUT_SPOTIFY_REDIRECT_URI`, or
-`STATION_SCOUT_SPOTIFY_CONFIG_URL`.
-
-## Notifications
-
-Station Scout uses wxPython for the desktop frontend. Native notifications are routed through
-platform-specific backends:
-
-- Windows: Toasted, so portable builds can register an app ID and appear correctly in Action Center.
-- macOS: desktop-notifier, which follows the modern Notification Center path for signed Python apps
-  or signed app bundles.
-- Development fallback: `wx.adv.NotificationMessage` if the platform backend is unavailable.
+- Search and browse working internet radio stations from the public Radio Browser directory.
+- Open StreamURL.link searches by station name or call letters, then play copied direct stream URLs.
+- Keep favorite stations, recent station history, tune-in timers, and playlist tracking logs.
+- Connect Last.fm and Spotify through browser-based authorization flows.
+- Discover podcasts, subscribe by feed URL or search result, import and export OPML, poll feeds,
+  queue episodes, mark episodes played, and review podcast notifications.
+- Store settings and podcast data locally with JSON and SQLite. SQLite is provided through
+  `rusqlite` with bundled SQLite.
 
 ## Run
 
 ```powershell
-uv run station-scout
+cargo run --features gui
+```
+
+The desktop app uses GStreamer for internal playback of radio stations and podcast
+episodes. On Windows, install the pinned GStreamer runtime/development files before
+running the GUI:
+
+```powershell
+.\scripts\install-gstreamer-windows.ps1
+cargo run --features gui
 ```
 
 ## Test
 
 ```powershell
-uv run pytest
-uv run ruff check .
-uv run python -m build
+cargo fmt --check
+cargo test
+cargo check --bin station-scout --features gui
+```
+
+Rust builds require the GStreamer native development files because playback is part of
+the application. GitHub Actions installs the native GStreamer packages before tests and
+GUI builds.
+
+## Packaging
+
+The Windows installer script expects the release executable under `dist/windows/` and writes
+installer output to `dist/`.
+
+```powershell
+cargo build --release --features gui
+New-Item -ItemType Directory -Force dist/windows
+Copy-Item target/release/station-scout.exe dist/windows/StationScout.exe
 ```

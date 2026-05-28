@@ -11,9 +11,11 @@ pub struct UiBlueprint {
     pub sections: &'static [&'static str],
     pub primary_actions: &'static [&'static str],
     pub list_names: &'static [&'static str],
+    pub station_activation_lists: &'static [&'static str],
     pub notebook_pages: &'static [&'static str],
     pub now_playing_controls: &'static [&'static str],
     pub now_playing_status_fields: &'static [&'static str],
+    pub playback_shortcuts: &'static [&'static str],
     pub playback_speed_choices: &'static [&'static str],
     pub sleep_timer_choices: &'static [&'static str],
     pub per_show_notification_choices: &'static [&'static str],
@@ -39,9 +41,9 @@ pub fn startup_state_for_podcast_subscriptions(has_active_subscriptions: bool) -
     } else {
         UiStartupState {
             show_first_run_panel: true,
-            show_main_workspace: false,
-            initial_focus: "Search podcasts",
-            status: "No podcast subscriptions yet.",
+            show_main_workspace: true,
+            initial_focus: "Favorite stations",
+            status: "Ready. No podcast subscriptions yet.",
         }
     }
 }
@@ -56,14 +58,22 @@ pub fn station_scout_ui_blueprint() -> UiBlueprint {
             "First run - Import OPML",
             "First run - Search podcasts",
         ],
-        menu_titles: &["File", "Edit", "Help"],
+        menu_titles: &["File", "Playback"],
         menu_items: &[
-            "Import OPML",
-            "Export OPML",
-            "Exit",
             "Settings",
-            "User manual",
-            "About",
+            "Quit",
+            "Focus search",
+            "Play selected",
+            "Play/Pause",
+            "Stop",
+            "Volume up",
+            "Volume down",
+            "Play on this computer",
+            "Play on Sonos",
+            "Cast to Chromecast",
+            "Add tune-in timer",
+            "Start tracking",
+            "Stop tracking",
         ],
         sections: &[
             "Station",
@@ -132,16 +142,25 @@ pub fn station_scout_ui_blueprint() -> UiBlueprint {
             "Notification inbox",
             "Podcast inbox",
         ],
-        notebook_pages: &["Subscriptions", "Episodes", "Queue", "Inbox"],
-        now_playing_controls: &[
-            "Skip back 15 seconds",
-            "Play or pause",
-            "Skip forward 30 seconds",
-            "Previous chapter",
-            "Next chapter",
-            "Announce current position",
+        station_activation_lists: &[
+            "Station search results",
+            "Favorite stations",
+            "Recently played stations",
         ],
+        notebook_pages: &["Subscriptions", "Episodes", "Queue", "Inbox"],
+        now_playing_controls: &["Stop current playback"],
         now_playing_status_fields: &["Now-playing episode title", "Now-playing status"],
+        playback_shortcuts: &[
+            "Ctrl+F",
+            "Ctrl+P",
+            "Ctrl+Space",
+            "Ctrl+S",
+            "Ctrl+Up",
+            "Ctrl+Down",
+            "Ctrl+T",
+            "Ctrl+Shift+T",
+            "Ctrl+Shift+S",
+        ],
         playback_speed_choices: &["0.8x", "1.0x", "1.25x", "1.5x", "1.75x", "2.0x"],
         sleep_timer_choices: &[
             "Off",
@@ -217,7 +236,10 @@ pub mod wx {
         APP_TITLE, UiStartupState, startup_state_for_podcast_subscriptions,
         station_scout_ui_blueprint,
     };
+    use crate::lastfm::lastfm_settings_view_state;
     use crate::models::{BrowseFacet, BrowseFacetKind, Station, TuneTimer};
+    use crate::player::gstreamer_radio_player;
+    use crate::player::{RadioPlayer, play_podcast_episode_stream, play_station_stream};
     use crate::podcasts::discovery::PodcastSearchClient;
     use crate::podcasts::repository::EpisodeRow;
     use crate::radio_browser::RadioBrowserClient;
@@ -229,19 +251,35 @@ pub mod wx {
     use chrono::{Duration, Utc};
     use std::cell::RefCell;
     use std::fs;
-    use std::process::Command;
     use std::rc::Rc;
     use wxdragon::prelude::*;
 
-    const MENU_ID_IMPORT_OPML: Id = 32_001;
-    const MENU_ID_EXPORT_OPML: Id = 32_002;
-    const MENU_ID_SETTINGS: Id = 32_003;
-    const MENU_ID_USER_MANUAL: Id = 32_004;
+    const MENU_ID_SETTINGS: Id = 32_001;
+    const MENU_ID_FOCUS_SEARCH: Id = 32_002;
+    const MENU_ID_PLAY_SELECTED: Id = 32_003;
+    const MENU_ID_TOGGLE_PAUSE: Id = 32_004;
+    const MENU_ID_STOP_PLAYBACK: Id = 32_005;
+    const MENU_ID_VOLUME_UP: Id = 32_006;
+    const MENU_ID_VOLUME_DOWN: Id = 32_007;
+    const MENU_ID_PLAY_ON_COMPUTER: Id = 32_008;
+    const MENU_ID_CAST_SONOS: Id = 32_009;
+    const MENU_ID_CAST_CHROMECAST: Id = 32_010;
+    const MENU_ID_ADD_TIMER: Id = 32_011;
+    const MENU_ID_START_TRACKING: Id = 32_012;
+    const MENU_ID_STOP_TRACKING: Id = 32_013;
+    const VOLUME_STEP: f64 = 0.1;
 
     #[derive(Clone, Copy)]
     struct MainControls {
         frame: Frame,
         status: StaticText,
+    }
+
+    #[derive(Clone, Copy)]
+    struct FirstRunControls {
+        subscribe: Button,
+        import_opml: Button,
+        search_podcasts: Button,
     }
 
     #[derive(Clone, Copy)]
@@ -281,10 +319,19 @@ pub mod wx {
         add_favorite: Button,
         open_website: Button,
         add_timer: Button,
+        start_tracking: Button,
+        stop_tracking: Button,
         station_results: ListCtrl,
         favorites: ListBox,
         recents: ListBox,
         timers: ListBox,
+    }
+
+    #[derive(Clone, Copy)]
+    struct PlaybackControls {
+        title: StaticText,
+        status: StaticText,
+        stop: Button,
     }
 
     #[derive(Clone, Copy)]
@@ -329,11 +376,27 @@ pub mod wx {
         browse_facets: Vec<BrowseFacet>,
         favorite_stations: Vec<Station>,
         recent_stations: Vec<Station>,
+        active_source: RadioSelectionSource,
+    }
+
+    #[derive(Clone, Copy, Eq, PartialEq)]
+    enum RadioSelectionSource {
+        Any,
+        SearchResults,
+        Favorites,
+        Recents,
+    }
+
+    impl Default for RadioSelectionSource {
+        fn default() -> Self {
+            Self::Favorites
+        }
     }
 
     type SharedRuntime = Rc<RefCell<Option<StationScoutRuntime>>>;
     type SharedPodcastListState = Rc<RefCell<PodcastListState>>;
     type SharedRadioListState = Rc<RefCell<RadioListState>>;
+    type SharedPlayer = Rc<RefCell<RadioPlayer>>;
 
     pub fn run() {
         let (startup, runtime, startup_error) =
@@ -375,8 +438,9 @@ pub mod wx {
         let panel = Panel::builder(&frame).build();
         let root = BoxSizer::builder(Orientation::Vertical).build();
 
-        add_first_run_panel(&panel, &root, startup);
-        let (radio_controls, podcast_controls) = add_main_workspace(&panel, &root, startup);
+        let first_run_controls = add_first_run_panel(&panel, &root, startup);
+        let (radio_controls, podcast_controls, playback_controls) =
+            add_main_workspace(&panel, &root, startup);
 
         let status = StaticText::builder(&panel)
             .with_label(startup.status)
@@ -388,11 +452,28 @@ pub mod wx {
         let controls = MainControls { frame, status };
         controls.status.set_label(startup.status);
         controls.frame.set_status_text(startup.status, 0);
+        let initial_volume = runtime
+            .borrow()
+            .as_ref()
+            .map(|runtime| runtime.state.volume)
+            .unwrap_or(1.0);
+        let mut radio_player = create_radio_player(controls);
+        radio_player.set_volume(initial_volume);
+        let player = Rc::new(RefCell::new(radio_player));
         let radio_state = Rc::new(RefCell::new(RadioListState::default()));
         let list_state = Rc::new(RefCell::new(PodcastListState::default()));
         wire_menu_events(
             controls,
             runtime.clone(),
+            radio_controls,
+            radio_state.clone(),
+            player.clone(),
+            playback_controls,
+        );
+        wire_first_run_events(
+            controls,
+            runtime.clone(),
+            first_run_controls,
             podcast_controls,
             list_state.clone(),
         );
@@ -401,13 +482,18 @@ pub mod wx {
             runtime.clone(),
             radio_controls,
             radio_state.clone(),
+            player.clone(),
+            playback_controls,
         );
         wire_podcast_events(
             controls,
             runtime.clone(),
             podcast_controls,
             list_state.clone(),
+            player.clone(),
+            playback_controls,
         );
+        wire_playback_events(controls, player, playback_controls);
         if let Some(error) = startup_error {
             set_status(controls, &format!("Runtime unavailable: {error}"));
         } else if let Err(error) = refresh_radio_lists(runtime.clone(), radio_controls, radio_state)
@@ -417,30 +503,68 @@ pub mod wx {
             set_status(controls, &format!("Podcast refresh failed: {error}"));
         }
         controls.frame.show(true);
+        if startup.initial_focus == "Favorite stations" {
+            radio_controls.favorites.set_focus();
+        }
+    }
+
+    fn create_radio_player(controls: MainControls) -> RadioPlayer {
+        match gstreamer_radio_player() {
+            Ok(player) => player,
+            Err(error) => {
+                let message = format!("Audio playback unavailable: {error}");
+                controls.status.set_label(&message);
+                controls.frame.set_status_text(&message, 0);
+                RadioPlayer::without_backend()
+            }
+        }
     }
 
     fn wire_menu_events(
         controls: MainControls,
         runtime: SharedRuntime,
-        podcast_controls: PodcastControls,
-        list_state: SharedPodcastListState,
+        radio_controls: RadioControls,
+        radio_state: SharedRadioListState,
+        player: SharedPlayer,
+        playback_controls: PlaybackControls,
     ) {
         controls.frame.on_menu_selected(move |event| {
             let result = match event.get_id() {
-                MENU_ID_IMPORT_OPML => import_opml_from_dialog(
-                    controls,
+                MENU_ID_SETTINGS => show_settings_dialog(controls, runtime.clone()),
+                MENU_ID_FOCUS_SEARCH => {
+                    radio_controls.name.set_focus();
+                    Ok("Search focused.".to_string())
+                }
+                MENU_ID_PLAY_SELECTED => play_selected_radio_from_source(
                     runtime.clone(),
-                    podcast_controls,
-                    list_state.clone(),
+                    radio_controls,
+                    radio_state.clone(),
+                    player.clone(),
+                    playback_controls,
+                    RadioSelectionSource::Any,
                 ),
-                MENU_ID_EXPORT_OPML => export_opml_from_dialog(controls, runtime.clone()),
-                MENU_ID_SETTINGS => {
-                    Ok("Settings are available in the podcast settings area.".to_string())
+                MENU_ID_TOGGLE_PAUSE => toggle_playback_pause(controls, player.clone()),
+                MENU_ID_STOP_PLAYBACK => stop_playback(controls, player.clone(), playback_controls),
+                MENU_ID_VOLUME_UP => {
+                    change_playback_volume(controls, runtime.clone(), player.clone(), VOLUME_STEP)
                 }
-                MENU_ID_USER_MANUAL => Ok("User manual is not bundled yet.".to_string()),
-                ID_ABOUT => {
-                    Ok("Station Scout: accessible internet radio and podcasts.".to_string())
+                MENU_ID_VOLUME_DOWN => {
+                    change_playback_volume(controls, runtime.clone(), player.clone(), -VOLUME_STEP)
                 }
+                MENU_ID_PLAY_ON_COMPUTER => Ok("Playback is set to this computer.".to_string()),
+                MENU_ID_CAST_SONOS => {
+                    Ok("Sonos playback is not ported to the Rust app yet.".to_string())
+                }
+                MENU_ID_CAST_CHROMECAST => {
+                    Ok("Chromecast playback is not ported to the Rust app yet.".to_string())
+                }
+                MENU_ID_ADD_TIMER => {
+                    add_selected_radio_timer(runtime.clone(), radio_controls, radio_state.clone())
+                }
+                MENU_ID_START_TRACKING => {
+                    Ok("Playlist tracking is not ported to the Rust app yet.".to_string())
+                }
+                MENU_ID_STOP_TRACKING => Ok("Playlist tracking is not running.".to_string()),
                 ID_EXIT => {
                     controls.frame.close(true);
                     Ok(String::new())
@@ -455,11 +579,53 @@ pub mod wx {
         });
     }
 
+    fn wire_first_run_events(
+        controls: MainControls,
+        runtime: SharedRuntime,
+        first_run_controls: FirstRunControls,
+        podcast_controls: PodcastControls,
+        list_state: SharedPodcastListState,
+    ) {
+        first_run_controls.subscribe.on_click(move |_| {
+            podcast_controls.feed_url.set_focus();
+            set_status(
+                controls,
+                "Enter a podcast feed URL, then choose Subscribe by URL in Subscriptions.",
+            );
+        });
+
+        {
+            let runtime = runtime.clone();
+            let list_state = list_state.clone();
+            first_run_controls.import_opml.on_click(move |_| {
+                report_action(
+                    controls,
+                    import_opml_from_dialog(
+                        controls,
+                        runtime.clone(),
+                        podcast_controls,
+                        list_state.clone(),
+                    ),
+                );
+            });
+        }
+
+        first_run_controls.search_podcasts.on_click(move |_| {
+            podcast_controls.query.set_focus();
+            set_status(
+                controls,
+                "Enter search terms, then choose Run podcast search.",
+            );
+        });
+    }
+
     fn wire_radio_events(
         controls: MainControls,
         runtime: SharedRuntime,
         radio_controls: RadioControls,
         radio_state: SharedRadioListState,
+        player: SharedPlayer,
+        playback_controls: PlaybackControls,
     ) {
         {
             let runtime = runtime.clone();
@@ -510,10 +676,188 @@ pub mod wx {
         {
             let runtime = runtime.clone();
             let radio_state = radio_state.clone();
+            let player = player.clone();
             radio_controls.play_selected.on_click(move |_| {
                 report_action(
                     controls,
-                    play_selected_radio(runtime.clone(), radio_controls, radio_state.clone()),
+                    play_selected_radio_from_source(
+                        runtime.clone(),
+                        radio_controls,
+                        radio_state.clone(),
+                        player.clone(),
+                        playback_controls,
+                        RadioSelectionSource::Any,
+                    ),
+                );
+            });
+        }
+        {
+            let radio_state = radio_state.clone();
+            radio_controls.station_results.on_item_focused(move |_| {
+                radio_state.borrow_mut().active_source = RadioSelectionSource::SearchResults;
+            });
+        }
+        {
+            let radio_state = radio_state.clone();
+            radio_controls.station_results.on_item_selected(move |_| {
+                radio_state.borrow_mut().active_source = RadioSelectionSource::SearchResults;
+            });
+        }
+        {
+            let radio_state = radio_state.clone();
+            radio_controls.favorites.on_set_focus(move |_| {
+                radio_state.borrow_mut().active_source = RadioSelectionSource::Favorites;
+            });
+        }
+        {
+            let radio_state = radio_state.clone();
+            radio_controls.recents.on_set_focus(move |_| {
+                radio_state.borrow_mut().active_source = RadioSelectionSource::Recents;
+            });
+        }
+        {
+            let runtime = runtime.clone();
+            let radio_state = radio_state.clone();
+            let player = player.clone();
+            radio_controls.station_results.on_item_activated(move |_| {
+                report_action(
+                    controls,
+                    play_selected_radio_from_source(
+                        runtime.clone(),
+                        radio_controls,
+                        radio_state.clone(),
+                        player.clone(),
+                        playback_controls,
+                        RadioSelectionSource::SearchResults,
+                    ),
+                );
+            });
+        }
+        {
+            let runtime = runtime.clone();
+            let radio_state = radio_state.clone();
+            let player = player.clone();
+            radio_controls.favorites.on_key_down(move |event| {
+                if is_enter_key(&event) {
+                    report_action(
+                        controls,
+                        play_selected_radio_from_source(
+                            runtime.clone(),
+                            radio_controls,
+                            radio_state.clone(),
+                            player.clone(),
+                            playback_controls,
+                            RadioSelectionSource::Favorites,
+                        ),
+                    );
+                    event.skip(false);
+                } else {
+                    event.skip(true);
+                }
+            });
+        }
+        {
+            let runtime = runtime.clone();
+            let radio_state = radio_state.clone();
+            let player = player.clone();
+            radio_controls.favorites.on_char(move |event| {
+                if is_enter_key(&event) {
+                    report_action(
+                        controls,
+                        play_selected_radio_from_source(
+                            runtime.clone(),
+                            radio_controls,
+                            radio_state.clone(),
+                            player.clone(),
+                            playback_controls,
+                            RadioSelectionSource::Favorites,
+                        ),
+                    );
+                    event.skip(false);
+                } else {
+                    event.skip(true);
+                }
+            });
+        }
+        {
+            let runtime = runtime.clone();
+            let radio_state = radio_state.clone();
+            let player = player.clone();
+            radio_controls.favorites.on_item_double_clicked(move |_| {
+                report_action(
+                    controls,
+                    play_selected_radio_from_source(
+                        runtime.clone(),
+                        radio_controls,
+                        radio_state.clone(),
+                        player.clone(),
+                        playback_controls,
+                        RadioSelectionSource::Favorites,
+                    ),
+                );
+            });
+        }
+        {
+            let runtime = runtime.clone();
+            let radio_state = radio_state.clone();
+            let player = player.clone();
+            radio_controls.recents.on_key_down(move |event| {
+                if is_enter_key(&event) {
+                    report_action(
+                        controls,
+                        play_selected_radio_from_source(
+                            runtime.clone(),
+                            radio_controls,
+                            radio_state.clone(),
+                            player.clone(),
+                            playback_controls,
+                            RadioSelectionSource::Recents,
+                        ),
+                    );
+                    event.skip(false);
+                } else {
+                    event.skip(true);
+                }
+            });
+        }
+        {
+            let runtime = runtime.clone();
+            let radio_state = radio_state.clone();
+            let player = player.clone();
+            radio_controls.recents.on_char(move |event| {
+                if is_enter_key(&event) {
+                    report_action(
+                        controls,
+                        play_selected_radio_from_source(
+                            runtime.clone(),
+                            radio_controls,
+                            radio_state.clone(),
+                            player.clone(),
+                            playback_controls,
+                            RadioSelectionSource::Recents,
+                        ),
+                    );
+                    event.skip(false);
+                } else {
+                    event.skip(true);
+                }
+            });
+        }
+        {
+            let runtime = runtime.clone();
+            let radio_state = radio_state.clone();
+            let player = player.clone();
+            radio_controls.recents.on_item_double_clicked(move |_| {
+                report_action(
+                    controls,
+                    play_selected_radio_from_source(
+                        runtime.clone(),
+                        radio_controls,
+                        radio_state.clone(),
+                        player.clone(),
+                        playback_controls,
+                        RadioSelectionSource::Recents,
+                    ),
                 );
             });
         }
@@ -527,20 +871,109 @@ pub mod wx {
                 );
             });
         }
-        radio_controls.open_website.on_click(move |_| {
-            report_action(
+        {
+            let radio_state = radio_state.clone();
+            radio_controls.open_website.on_click(move |_| {
+                report_action(
+                    controls,
+                    selected_radio_station(radio_controls, radio_state.clone())
+                        .ok_or_else(|| "Select a station first.".to_string())
+                        .and_then(|station| {
+                            if station.homepage.trim().is_empty() {
+                                Err("Selected station has no website.".to_string())
+                            } else {
+                                Ok(format!("Website: {}", station.homepage))
+                            }
+                        }),
+                );
+            });
+        }
+        radio_controls.start_tracking.on_click(move |_| {
+            set_status(
                 controls,
-                selected_radio_station(radio_controls, radio_state.clone())
-                    .ok_or_else(|| "Select a station first.".to_string())
-                    .and_then(|station| {
-                        if station.homepage.trim().is_empty() {
-                            Err("Selected station has no website.".to_string())
-                        } else {
-                            Ok(format!("Website: {}", station.homepage))
-                        }
-                    }),
+                "Playlist tracking is not ported to the Rust app yet.",
             );
         });
+        radio_controls.stop_tracking.on_click(move |_| {
+            set_status(controls, "Playlist tracking is not running.");
+        });
+        bind_frame_station_enter_handlers(
+            controls,
+            runtime,
+            radio_controls,
+            radio_state,
+            player,
+            playback_controls,
+        );
+    }
+
+    fn bind_frame_station_enter_handlers(
+        controls: MainControls,
+        runtime: SharedRuntime,
+        radio_controls: RadioControls,
+        radio_state: SharedRadioListState,
+        player: SharedPlayer,
+        playback_controls: PlaybackControls,
+    ) {
+        {
+            let runtime = runtime.clone();
+            let radio_state = radio_state.clone();
+            let player = player.clone();
+            controls.frame.on_key_down(move |event| {
+                if let Some(source) = focused_radio_selection_source(radio_controls, &event) {
+                    report_action(
+                        controls,
+                        play_selected_radio_from_source(
+                            runtime.clone(),
+                            radio_controls,
+                            radio_state.clone(),
+                            player.clone(),
+                            playback_controls,
+                            source,
+                        ),
+                    );
+                    event.skip(false);
+                } else {
+                    event.skip(true);
+                }
+            });
+        }
+        controls.frame.on_char(move |event| {
+            if let Some(source) = focused_radio_selection_source(radio_controls, &event) {
+                report_action(
+                    controls,
+                    play_selected_radio_from_source(
+                        runtime.clone(),
+                        radio_controls,
+                        radio_state.clone(),
+                        player.clone(),
+                        playback_controls,
+                        source,
+                    ),
+                );
+                event.skip(false);
+            } else {
+                event.skip(true);
+            }
+        });
+    }
+
+    fn focused_radio_selection_source(
+        controls: RadioControls,
+        event: &WindowEventData,
+    ) -> Option<RadioSelectionSource> {
+        if !is_enter_key(event) {
+            return None;
+        }
+        if controls.station_results.has_focus() {
+            Some(RadioSelectionSource::SearchResults)
+        } else if controls.favorites.has_focus() {
+            Some(RadioSelectionSource::Favorites)
+        } else if controls.recents.has_focus() {
+            Some(RadioSelectionSource::Recents)
+        } else {
+            None
+        }
     }
 
     fn search_radio(
@@ -658,52 +1091,32 @@ pub mod wx {
         Ok(format!("Added favorite: {}.", station.name))
     }
 
-    fn play_selected_radio(
+    fn play_selected_radio_from_source(
         runtime: SharedRuntime,
         controls: RadioControls,
         radio_state: SharedRadioListState,
+        player: SharedPlayer,
+        playback_controls: PlaybackControls,
+        source: RadioSelectionSource,
     ) -> Result<String, String> {
-        let station = selected_radio_station(controls, radio_state.clone())
+        let station = selected_radio_station_from_source(controls, radio_state.clone(), source)
             .ok_or_else(|| "Select a station first.".to_string())?;
-        if station.url_resolved.trim().is_empty() {
-            return Err("Selected station has no playable stream URL.".to_string());
-        }
+        let message = play_station_stream(&mut player.borrow_mut(), &station)?;
+        update_now_playing(
+            playback_controls,
+            &station.name,
+            &format!("Station stream: {}", station.url_resolved),
+        );
         {
             let mut borrowed = runtime.borrow_mut();
             let runtime = borrowed
                 .as_mut()
                 .ok_or_else(|| "Runtime unavailable.".to_string())?;
-            open_url(&station.url_resolved)?;
             runtime.record_radio_recent(station.clone())?;
             runtime.save_settings()?;
         }
         refresh_radio_lists(runtime, controls, radio_state)?;
-        Ok(format!("Playing {}.", station.name))
-    }
-
-    fn open_url(url: &str) -> Result<(), String> {
-        #[cfg(target_os = "windows")]
-        let mut command = {
-            let mut command = Command::new("cmd");
-            command.args(["/C", "start", "", url]);
-            command
-        };
-        #[cfg(target_os = "macos")]
-        let mut command = {
-            let mut command = Command::new("open");
-            command.arg(url);
-            command
-        };
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let mut command = {
-            let mut command = Command::new("xdg-open");
-            command.arg(url);
-            command
-        };
-        command
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| format!("Could not open stream URL: {error}"))
+        Ok(message)
     }
 
     fn add_selected_radio_timer(
@@ -764,21 +1177,52 @@ pub mod wx {
         controls: RadioControls,
         radio_state: SharedRadioListState,
     ) -> Option<Station> {
+        selected_radio_station_from_source(controls, radio_state, RadioSelectionSource::Any)
+    }
+
+    fn selected_radio_station_from_source(
+        controls: RadioControls,
+        radio_state: SharedRadioListState,
+        source: RadioSelectionSource,
+    ) -> Option<Station> {
         let state = radio_state.borrow();
-        let selected_result = controls.station_results.get_first_selected_item();
-        if selected_result >= 0 {
-            return state.station_results.get(selected_result as usize).cloned();
-        }
-        let favorite = controls
-            .favorites
-            .get_selection()
-            .and_then(|index| state.favorite_stations.get(index as usize).cloned());
-        favorite.or_else(|| {
+        let selected_result = || {
+            let index = controls.station_results.get_first_selected_item();
+            (index >= 0)
+                .then_some(index as usize)
+                .and_then(|index| state.station_results.get(index).cloned())
+        };
+        let selected_favorite = || {
+            controls
+                .favorites
+                .get_selection()
+                .and_then(|index| state.favorite_stations.get(index as usize).cloned())
+        };
+        let selected_recent = || {
             controls
                 .recents
                 .get_selection()
                 .and_then(|index| state.recent_stations.get(index as usize).cloned())
-        })
+        };
+        match source {
+            RadioSelectionSource::Any => match state.active_source {
+                RadioSelectionSource::SearchResults => selected_result()
+                    .or_else(selected_favorite)
+                    .or_else(selected_recent),
+                RadioSelectionSource::Favorites => selected_favorite()
+                    .or_else(selected_recent)
+                    .or_else(selected_result),
+                RadioSelectionSource::Recents => selected_recent()
+                    .or_else(selected_favorite)
+                    .or_else(selected_result),
+                RadioSelectionSource::Any => selected_favorite()
+                    .or_else(selected_recent)
+                    .or_else(selected_result),
+            },
+            RadioSelectionSource::SearchResults => selected_result(),
+            RadioSelectionSource::Favorites => selected_favorite(),
+            RadioSelectionSource::Recents => selected_recent(),
+        }
     }
 
     fn fill_station_results(list: ListCtrl, stations: &[Station]) {
@@ -799,6 +1243,8 @@ pub mod wx {
         runtime: SharedRuntime,
         podcast_controls: PodcastControls,
         list_state: SharedPodcastListState,
+        player: SharedPlayer,
+        playback_controls: PlaybackControls,
     ) {
         {
             let runtime = runtime.clone();
@@ -867,10 +1313,16 @@ pub mod wx {
         }
         {
             let list_state = list_state.clone();
+            let player = player.clone();
             podcast_controls.play_episode.on_click(move |_| {
                 report_action(
                     controls,
-                    play_selected_podcast_episode(podcast_controls, list_state.clone()),
+                    play_selected_podcast_episode(
+                        podcast_controls,
+                        list_state.clone(),
+                        player.clone(),
+                        playback_controls,
+                    ),
                 );
             });
         }
@@ -960,11 +1412,131 @@ pub mod wx {
         });
     }
 
+    fn wire_playback_events(
+        controls: MainControls,
+        player: SharedPlayer,
+        playback_controls: PlaybackControls,
+    ) {
+        playback_controls.stop.on_click(move |_| {
+            report_action(
+                controls,
+                stop_playback(controls, player.clone(), playback_controls),
+            );
+        });
+    }
+
+    fn toggle_playback_pause(
+        _controls: MainControls,
+        player: SharedPlayer,
+    ) -> Result<String, String> {
+        let mut player = player.borrow_mut();
+        if player.toggle_pause() {
+            Ok("Toggled playback pause.".to_string())
+        } else if let Some(error) = player.last_error() {
+            Err(error.to_string())
+        } else {
+            Ok("No active playback to pause or resume.".to_string())
+        }
+    }
+
+    fn stop_playback(
+        _controls: MainControls,
+        player: SharedPlayer,
+        playback_controls: PlaybackControls,
+    ) -> Result<String, String> {
+        player.borrow_mut().stop();
+        update_now_playing(playback_controls, "Nothing playing", "");
+        Ok("Playback stopped.".to_string())
+    }
+
+    fn change_playback_volume(
+        controls: MainControls,
+        runtime: SharedRuntime,
+        player: SharedPlayer,
+        delta: f64,
+    ) -> Result<String, String> {
+        let volume = player.borrow_mut().change_volume(delta);
+        if let Some(error) = player.borrow().last_error() {
+            return Err(error.to_string());
+        }
+        {
+            let mut borrowed = runtime.borrow_mut();
+            if let Some(runtime) = borrowed.as_mut() {
+                runtime.state.volume = volume;
+                runtime.save_settings()?;
+            }
+        }
+        let message = format!("Volume {}%.", (volume * 100.0).round() as i32);
+        controls.frame.set_status_text(&message, 1);
+        Ok(message)
+    }
+
+    fn is_enter_key(event: &WindowEventData) -> bool {
+        match event {
+            WindowEventData::Keyboard(keyboard) => {
+                matches!(keyboard.get_key_code(), Some(13) | Some(370))
+            }
+            _ => false,
+        }
+    }
+
+    fn update_now_playing(controls: PlaybackControls, title: &str, status: &str) {
+        let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+        controls.title.set_label(if title.is_empty() {
+            "Nothing playing"
+        } else {
+            &title
+        });
+        controls.status.set_label(status);
+    }
+
     fn report_action(controls: MainControls, result: Result<String, String>) {
         match result {
             Ok(message) => set_status(controls, &message),
             Err(error) => set_status(controls, &error),
         }
+    }
+
+    fn show_settings_dialog(
+        controls: MainControls,
+        runtime: SharedRuntime,
+    ) -> Result<String, String> {
+        let message = {
+            let borrowed = runtime.borrow();
+            let runtime = borrowed
+                .as_ref()
+                .ok_or_else(|| "Runtime unavailable.".to_string())?;
+            let (lastfm_status, lastfm_action, show_finish) =
+                lastfm_settings_view_state(&runtime.state);
+            let spotify_status = if runtime.state.spotify_enabled {
+                "Connected."
+            } else {
+                "Not connected."
+            };
+            let finish_lastfm = if show_finish {
+                "\nFinish Last.fm: available after browser approval"
+            } else {
+                ""
+            };
+            format!(
+                "Playlist logs\nFolder: {}\n\nLast.fm\nStatus: {}\nScrobbling: {}\nAction: {}{}\n\nSpotify\nStatus: {}\nAction: Connect Spotify",
+                runtime.track_log_folder.display(),
+                lastfm_status,
+                if runtime.state.lastfm_scrobble_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                lastfm_action,
+                finish_lastfm,
+                spotify_status
+            )
+        };
+        let dialog = MessageDialog::builder(&controls.frame, &message, "Station Scout settings")
+            .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
+            .build();
+        dialog.show_modal();
+        Ok("Settings opened.".to_string())
     }
 
     fn import_opml_from_dialog(
@@ -999,35 +1571,6 @@ pub mod wx {
             "Imported OPML: {} added, {} duplicates, {} rejected.",
             summary.added, summary.skipped_duplicate, summary.rejected_scheme
         ))
-    }
-
-    fn export_opml_from_dialog(
-        controls: MainControls,
-        runtime: SharedRuntime,
-    ) -> Result<String, String> {
-        let dialog = FileDialog::builder(&controls.frame)
-            .with_message("Export OPML")
-            .with_default_file("station-scout-subscriptions.opml")
-            .with_wildcard("OPML files (*.opml)|*.opml|All files (*.*)|*.*")
-            .with_style(FileDialogStyle::Save | FileDialogStyle::OverwritePrompt)
-            .build();
-        if dialog.show_modal() != ID_OK {
-            return Ok("Export cancelled.".to_string());
-        }
-        let path = dialog
-            .get_path()
-            .ok_or_else(|| "No OPML destination was selected.".to_string())?;
-        let payload = {
-            let borrowed = runtime.borrow();
-            let runtime = borrowed
-                .as_ref()
-                .ok_or_else(|| "Runtime unavailable.".to_string())?;
-            runtime
-                .export_podcast_opml()
-                .map_err(|error| error.to_string())?
-        };
-        fs::write(&path, payload).map_err(|error| format!("Could not write OPML: {error}"))?;
-        Ok(format!("Exported OPML to {path}."))
     }
 
     fn run_podcast_search(
@@ -1163,21 +1706,22 @@ pub mod wx {
     fn play_selected_podcast_episode(
         controls: PodcastControls,
         list_state: SharedPodcastListState,
+        player: SharedPlayer,
+        playback_controls: PlaybackControls,
     ) -> Result<String, String> {
         let episode = selected_podcast_episode(controls, list_state)
             .ok_or_else(|| "Select an episode first.".to_string())?;
-        let url = episode
-            .enclosure_url
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| "Selected episode has no playable enclosure URL.".to_string())?;
-        open_url(url)?;
-        Ok(format!(
-            "Playing {}.",
-            episode
-                .title
-                .unwrap_or_else(|| "selected episode".to_string())
-        ))
+        let message = play_podcast_episode_stream(
+            &mut player.borrow_mut(),
+            episode.title.as_deref(),
+            episode.enclosure_url.as_deref(),
+        )?;
+        update_now_playing(
+            playback_controls,
+            episode.title.as_deref().unwrap_or("selected episode"),
+            episode.enclosure_url.as_deref().unwrap_or(""),
+        );
+        Ok(message)
     }
 
     fn mark_selected_episode_played(
@@ -1411,38 +1955,62 @@ pub mod wx {
 
     fn add_menu_bar(frame: &Frame) {
         let file_menu = Menu::builder()
-            .with_title("File")
+            .append_item(MENU_ID_SETTINGS, "&Settings...\tCtrl+,", "Settings")
+            .append_separator()
+            .append_item(ID_EXIT, "&Quit\tAlt+F4", "Quit")
+            .build();
+        let playback_menu = Menu::builder()
+            .append_item(MENU_ID_FOCUS_SEARCH, "Focus search\tCtrl+F", "Focus search")
             .append_item(
-                MENU_ID_IMPORT_OPML,
-                "&Import OPML...\tCtrl+I",
-                "Import OPML",
+                MENU_ID_PLAY_SELECTED,
+                "Play selected\tCtrl+P",
+                "Play selected",
             )
+            .append_item(MENU_ID_TOGGLE_PAUSE, "Play/Pause\tCtrl+Space", "Play/Pause")
+            .append_item(MENU_ID_STOP_PLAYBACK, "Stop\tCtrl+S", "Stop")
+            .append_item(MENU_ID_VOLUME_UP, "Volume up\tCtrl+Up", "Volume up")
+            .append_item(MENU_ID_VOLUME_DOWN, "Volume down\tCtrl+Down", "Volume down")
+            .append_separator()
             .append_item(
-                MENU_ID_EXPORT_OPML,
-                "&Export OPML...\tCtrl+E",
-                "Export OPML",
+                MENU_ID_PLAY_ON_COMPUTER,
+                "Play on this computer",
+                "Play on this computer",
+            )
+            .append_item(MENU_ID_CAST_SONOS, "Play on Sonos...", "Play on Sonos")
+            .append_item(
+                MENU_ID_CAST_CHROMECAST,
+                "Cast to Chromecast...",
+                "Cast to Chromecast",
             )
             .append_separator()
-            .append_item(ID_EXIT, "E&xit\tAlt+F4", "Exit")
-            .build();
-        let edit_menu = Menu::builder()
-            .with_title("Edit")
-            .append_item(MENU_ID_SETTINGS, "&Settings...\tCtrl+,", "Settings")
-            .build();
-        let help_menu = Menu::builder()
-            .with_title("Help")
-            .append_item(MENU_ID_USER_MANUAL, "&User manual\tF1", "User manual")
-            .append_item(ID_ABOUT, "&About", "About")
+            .append_item(
+                MENU_ID_ADD_TIMER,
+                "Add tune-in timer\tCtrl+T",
+                "Add tune-in timer",
+            )
+            .append_item(
+                MENU_ID_START_TRACKING,
+                "Start tracking\tCtrl+Shift+T",
+                "Start tracking",
+            )
+            .append_item(
+                MENU_ID_STOP_TRACKING,
+                "Stop tracking\tCtrl+Shift+S",
+                "Stop tracking",
+            )
             .build();
         let menu_bar = MenuBar::builder()
             .append(file_menu, "&File")
-            .append(edit_menu, "&Edit")
-            .append(help_menu, "&Help")
+            .append(playback_menu, "&Playback")
             .build();
         frame.set_menu_bar(menu_bar);
     }
 
-    fn add_first_run_panel(parent: &Panel, root: &BoxSizer, startup: UiStartupState) {
+    fn add_first_run_panel(
+        parent: &Panel,
+        root: &BoxSizer,
+        startup: UiStartupState,
+    ) -> FirstRunControls {
         let panel = Panel::builder(parent).build();
         panel.set_name("Podcast first run");
         let column = BoxSizer::builder(Orientation::Vertical).build();
@@ -1452,14 +2020,15 @@ pub mod wx {
         describe_control(&welcome, "First run - welcome text");
         column.add(&welcome, 0, SizerFlag::All | SizerFlag::Expand, 6);
         let actions = BoxSizer::builder(Orientation::Horizontal).build();
-        add_named_button(
+        let subscribe = add_named_button(
             &panel,
             &actions,
             "Subscribe by URL",
             "First run - Subscribe by URL",
         );
-        add_named_button(&panel, &actions, "Import OPML", "First run - Import OPML");
-        add_named_button(
+        let import_opml =
+            add_named_button(&panel, &actions, "Import OPML", "First run - Import OPML");
+        let search_podcasts = add_named_button(
             &panel,
             &actions,
             "Search podcasts",
@@ -1469,13 +2038,18 @@ pub mod wx {
         panel.set_sizer(column, true);
         panel.show(startup.show_first_run_panel);
         root.add(&panel, 0, SizerFlag::All | SizerFlag::Expand, 6);
+        FirstRunControls {
+            subscribe,
+            import_opml,
+            search_podcasts,
+        }
     }
 
     fn add_main_workspace(
         parent: &Panel,
         root: &BoxSizer,
         startup: UiStartupState,
-    ) -> (RadioControls, PodcastControls) {
+    ) -> (RadioControls, PodcastControls, PlaybackControls) {
         let panel = Panel::builder(parent).build();
         panel.set_name("Station Scout workspace");
         let column = BoxSizer::builder(Orientation::Vertical).build();
@@ -1483,14 +2057,13 @@ pub mod wx {
         let station_search = add_station_search(&panel, &column);
         let station_browse = add_station_browse(&panel, &column);
         let station_actions = add_station_actions(&panel, &column);
-        add_podcast_actions(&panel, &column);
         let search_controls = add_podcast_search(&panel, &column);
         add_podcast_settings(&panel, &column);
         add_lastfm_settings(&panel, &column);
         let station_results = add_station_results(&panel, &column);
         let saved_lists = add_radio_saved_lists(&panel, &column);
         let notebook_controls = add_podcast_notebook(&panel, &column);
-        add_now_playing_controls(&panel, &column);
+        let playback_controls = add_now_playing_controls(&panel, &column);
         panel.set_sizer(column, true);
         panel.show(startup.show_main_workspace);
         root.add(&panel, 1, SizerFlag::All | SizerFlag::Expand, 6);
@@ -1508,6 +2081,8 @@ pub mod wx {
                 add_favorite: station_actions.add_favorite,
                 open_website: station_actions.open_website,
                 add_timer: station_actions.add_timer,
+                start_tracking: station_actions.start_tracking,
+                stop_tracking: station_actions.stop_tracking,
                 station_results,
                 favorites: saved_lists.favorites,
                 recents: saved_lists.recents,
@@ -1534,6 +2109,7 @@ pub mod wx {
                 queue: notebook_controls.queue,
                 inbox: notebook_controls.inbox,
             },
+            playback_controls,
         )
     }
 
@@ -1628,31 +2204,28 @@ pub mod wx {
         add_favorite: Button,
         open_website: Button,
         add_timer: Button,
+        start_tracking: Button,
+        stop_tracking: Button,
     }
 
     fn add_station_actions(parent: &Panel, root: &BoxSizer) -> StationActionControls {
         let row = BoxSizer::builder(Orientation::Horizontal).build();
         let play_selected = add_button(parent, &row, "Play selected");
+        play_selected.set_default();
         let add_favorite = add_button(parent, &row, "Add favorite");
         let open_website = add_button(parent, &row, "Open website");
         let add_timer = add_button(parent, &row, "Add tune-in timer");
-        add_button(parent, &row, "Start tracking");
-        add_button(parent, &row, "Stop tracking");
+        let start_tracking = add_button(parent, &row, "Start tracking");
+        let stop_tracking = add_button(parent, &row, "Stop tracking");
         root.add_sizer(&row, 0, SizerFlag::Expand, 0);
         StationActionControls {
             play_selected,
             add_favorite,
             open_website,
             add_timer,
+            start_tracking,
+            stop_tracking,
         }
-    }
-
-    fn add_podcast_actions(parent: &Panel, root: &BoxSizer) {
-        let row = BoxSizer::builder(Orientation::Horizontal).build();
-        for label in station_scout_ui_blueprint().primary_actions.iter().skip(6) {
-            add_button(parent, &row, label);
-        }
-        root.add_sizer(&row, 0, SizerFlag::Expand, 0);
     }
 
     fn add_podcast_search(parent: &Panel, root: &BoxSizer) -> PodcastSearchControls {
@@ -1769,9 +2342,6 @@ pub mod wx {
             SizerFlag::All | SizerFlag::AlignCenterVertical,
             4,
         );
-
-        add_button(parent, &row, "Connect Last.fm");
-        add_button(parent, &row, "Finish Last.fm");
 
         root.add_sizer(&row, 0, SizerFlag::Expand, 0);
     }
@@ -1890,11 +2460,6 @@ pub mod wx {
         let subscription_actions = BoxSizer::builder(Orientation::Horizontal).build();
         let subscribe = add_button(parent, &subscription_actions, "Subscribe by URL");
         let check_now = add_button(parent, &subscription_actions, "Check for new episodes now");
-        add_button(
-            parent,
-            &subscription_actions,
-            "Per-show settings for selected show",
-        );
         let unsubscribe = add_button(parent, &subscription_actions, "Unsubscribe selected show");
         column.add_sizer(&subscription_actions, 0, SizerFlag::Expand, 0);
 
@@ -1902,10 +2467,6 @@ pub mod wx {
         let podcast_results = ListBox::builder(parent).build();
         describe_control(&podcast_results, "Podcast search results");
         column.add(&podcast_results, 1, SizerFlag::All | SizerFlag::Expand, 4);
-
-        let actions = BoxSizer::builder(Orientation::Horizontal).build();
-        add_button(parent, &actions, "Per-show settings");
-        column.add_sizer(&actions, 0, SizerFlag::Expand, 0);
 
         add_per_show_settings_controls(parent, &column);
         parent.set_sizer(column, true);
@@ -2055,14 +2616,13 @@ pub mod wx {
         column.add(&inbox, 1, SizerFlag::All | SizerFlag::Expand, 4);
 
         let row = BoxSizer::builder(Orientation::Horizontal).build();
-        add_button(parent, &row, "Open selected inbox entry");
         let clear_inbox = add_button(parent, &row, "Clear inbox");
         column.add_sizer(&row, 0, SizerFlag::Expand, 0);
         parent.set_sizer(column, true);
         InboxPageControls { clear_inbox, inbox }
     }
 
-    fn add_now_playing_controls(parent: &Panel, root: &BoxSizer) {
+    fn add_now_playing_controls(parent: &Panel, root: &BoxSizer) -> PlaybackControls {
         let body = BoxSizer::builder(Orientation::Horizontal).build();
         let status_col = BoxSizer::builder(Orientation::Vertical).build();
         add_label(parent, &status_col, "Now Playing");
@@ -2085,11 +2645,11 @@ pub mod wx {
 
         let controls = station_scout_ui_blueprint();
         let action_col = BoxSizer::builder(Orientation::Vertical).build();
-        let row = BoxSizer::builder(Orientation::Horizontal).build();
+        let transport_row = BoxSizer::builder(Orientation::Horizontal).build();
+        let stop = add_button(parent, &transport_row, "Stop current playback");
+        action_col.add_sizer(&transport_row, 0, SizerFlag::Expand, 0);
 
-        for label in controls.now_playing_controls {
-            add_button(parent, &row, label);
-        }
+        let row = BoxSizer::builder(Orientation::Horizontal).build();
 
         add_label(parent, &row, "Speed");
         let speed = Choice::builder(parent)
@@ -2122,6 +2682,11 @@ pub mod wx {
         action_col.add_sizer(&row, 0, SizerFlag::Expand, 0);
         body.add_sizer(&action_col, 2, SizerFlag::Expand, 0);
         root.add_sizer(&body, 0, SizerFlag::Expand, 0);
+        PlaybackControls {
+            title,
+            status,
+            stop,
+        }
     }
 
     fn add_button(parent: &Panel, row: &BoxSizer, label: &str) -> Button {
@@ -2138,7 +2703,7 @@ pub mod wx {
     fn add_label(parent: &Panel, row: &BoxSizer, label: &str) {
         let text = StaticText::builder(parent).with_label(label).build();
         text.set_name(label);
-        row.add(&text, 0, SizerFlag::All | SizerFlag::AlignCenterVertical, 4);
+        row.add(&text, 0, SizerFlag::All, 4);
     }
 
     fn describe_control(control: &impl WxWidget, description: &str) {

@@ -9,6 +9,10 @@ All notable user-facing changes to Station Scout are tracked here.
 - Rebuilt Station Scout as a Rust desktop app with native GStreamer playback for radio stations and podcasts.
 - Restored Last.fm and Spotify sign-in flows in the Rust app, including browser approval and saved account state.
 
+### Improved
+
+- Split the main window into separate Radio and Podcasts views so each surface stands on its own instead of one long stacked list. Switch between them any time from the tabs, the new View menu, or with Ctrl+1 and Ctrl+2 - and whatever you're playing keeps going in the shared Now Playing strip below.
+
 ### Fixed
 
 - Improved Spotify playlist export after tracking sessions so stale credentials refresh automatically when possible and clearly ask the listener to reconnect Spotify when authorization has expired.

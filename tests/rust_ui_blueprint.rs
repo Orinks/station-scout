@@ -291,6 +291,7 @@ fn ui_blueprint_includes_lastfm_settings_controls() {
     assert!(blueprint.sections.contains(&"Last.fm"));
     assert!(blueprint.primary_actions.contains(&"Connect Last.fm"));
     assert!(blueprint.primary_actions.contains(&"Finish Last.fm"));
+    assert!(blueprint.primary_actions.contains(&"Connect Spotify"));
     assert!(
         blueprint
             .label_order_pairs
@@ -300,6 +301,11 @@ fn ui_blueprint_includes_lastfm_settings_controls() {
         blueprint
             .label_order_pairs
             .contains(&("Scrobbling", "Scrobble played songs to Last.fm"))
+    );
+    assert!(
+        blueprint
+            .label_order_pairs
+            .contains(&("Spotify status", "Spotify connection status"))
     );
 }
 

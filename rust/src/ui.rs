@@ -125,6 +125,7 @@ pub fn station_scout_ui_blueprint() -> UiBlueprint {
             "Clear inbox",
             "Connect Last.fm",
             "Finish Last.fm",
+            "Connect Spotify",
         ],
         list_names: &[
             "Station search results",
@@ -213,6 +214,7 @@ pub fn station_scout_ui_blueprint() -> UiBlueprint {
             ("Podcast Index API secret", "Podcast Index API secret"),
             ("Last.fm status", "Last.fm connection status"),
             ("Scrobbling", "Scrobble played songs to Last.fm"),
+            ("Spotify status", "Spotify connection status"),
             ("Speed", "Playback speed"),
             ("Sleep timer", "Sleep timer"),
             ("Show notes", "Show notes"),
@@ -236,7 +238,8 @@ pub mod wx {
         APP_TITLE, UiStartupState, startup_state_for_podcast_subscriptions,
         station_scout_ui_blueprint,
     };
-    use crate::lastfm::lastfm_settings_view_state;
+    use crate::integrations_config::{lastfm_app_config, spotify_app_config};
+    use crate::lastfm::{LastFmClient, LastFmProxyClient, lastfm_settings_view_state};
     use crate::models::{BrowseFacet, BrowseFacetKind, Station, TuneTimer};
     use crate::player::gstreamer_radio_player;
     use crate::player::{RadioPlayer, play_podcast_episode_stream, play_station_stream};
@@ -244,6 +247,7 @@ pub mod wx {
     use crate::podcasts::repository::EpisodeRow;
     use crate::radio_browser::RadioBrowserClient;
     use crate::runtime::StationScoutRuntime;
+    use crate::spotify::{DEFAULT_SCOPES, SpotifyClient, build_spotify_auth_request};
     use crate::storage::system_credential_store;
     use crate::ui_actions::{
         PodcastUiModel, podcast_search_result_label, station_label, timer_label,
@@ -251,7 +255,12 @@ pub mod wx {
     use chrono::{Duration, Utc};
     use std::cell::RefCell;
     use std::fs;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::process::Command;
     use std::rc::Rc;
+    use std::sync::mpsc::{self, Receiver, TryRecvError};
+    use std::thread;
     use wxdragon::prelude::*;
 
     const MENU_ID_SETTINGS: Id = 32_001;
@@ -321,6 +330,12 @@ pub mod wx {
         add_timer: Button,
         start_tracking: Button,
         stop_tracking: Button,
+        lastfm_status: StaticText,
+        lastfm_scrobbling: CheckBox,
+        connect_lastfm: Button,
+        finish_lastfm: Button,
+        spotify_status: StaticText,
+        connect_spotify: Button,
         station_results: ListCtrl,
         favorites: ListBox,
         recents: ListBox,
@@ -332,6 +347,41 @@ pub mod wx {
         title: StaticText,
         status: StaticText,
         stop: Button,
+    }
+
+    struct SpotifyCallbackState {
+        redirect_uri: String,
+        receiver: Option<Receiver<SpotifyCallbackMessage>>,
+        dialog_controls: Option<IntegrationControls>,
+    }
+
+    struct SpotifyCallbackMessage {
+        code: String,
+        state: String,
+        error: String,
+    }
+
+    #[derive(Clone, Copy)]
+    struct IntegrationControls {
+        lastfm_status: StaticText,
+        lastfm_scrobbling: CheckBox,
+        connect_lastfm: Button,
+        finish_lastfm: Button,
+        spotify_status: StaticText,
+        connect_spotify: Button,
+    }
+
+    impl RadioControls {
+        fn integration_controls(&self) -> IntegrationControls {
+            IntegrationControls {
+                lastfm_status: self.lastfm_status,
+                lastfm_scrobbling: self.lastfm_scrobbling,
+                connect_lastfm: self.connect_lastfm,
+                finish_lastfm: self.finish_lastfm,
+                spotify_status: self.spotify_status,
+                connect_spotify: self.connect_spotify,
+            }
+        }
     }
 
     #[derive(Clone, Copy)]
@@ -397,6 +447,7 @@ pub mod wx {
     type SharedPodcastListState = Rc<RefCell<PodcastListState>>;
     type SharedRadioListState = Rc<RefCell<RadioListState>>;
     type SharedPlayer = Rc<RefCell<RadioPlayer>>;
+    type SharedSpotifyCallbackState = Rc<RefCell<SpotifyCallbackState>>;
 
     pub fn run() {
         let (startup, runtime, startup_error) =
@@ -462,6 +513,11 @@ pub mod wx {
         let player = Rc::new(RefCell::new(radio_player));
         let radio_state = Rc::new(RefCell::new(RadioListState::default()));
         let list_state = Rc::new(RefCell::new(PodcastListState::default()));
+        let spotify_callback_state = Rc::new(RefCell::new(SpotifyCallbackState {
+            redirect_uri: String::new(),
+            receiver: None,
+            dialog_controls: None,
+        }));
         wire_menu_events(
             controls,
             runtime.clone(),
@@ -469,6 +525,7 @@ pub mod wx {
             radio_state.clone(),
             player.clone(),
             playback_controls,
+            spotify_callback_state.clone(),
         );
         wire_first_run_events(
             controls,
@@ -484,6 +541,7 @@ pub mod wx {
             radio_state.clone(),
             player.clone(),
             playback_controls,
+            spotify_callback_state.clone(),
         );
         wire_podcast_events(
             controls,
@@ -494,6 +552,13 @@ pub mod wx {
             playback_controls,
         );
         wire_playback_events(controls, player, playback_controls);
+        refresh_integration_controls(runtime.clone(), radio_controls.integration_controls());
+        install_spotify_callback_poller(
+            controls,
+            runtime.clone(),
+            radio_controls.integration_controls(),
+            spotify_callback_state,
+        );
         if let Some(error) = startup_error {
             set_status(controls, &format!("Runtime unavailable: {error}"));
         } else if let Err(error) = refresh_radio_lists(runtime.clone(), radio_controls, radio_state)
@@ -527,10 +592,16 @@ pub mod wx {
         radio_state: SharedRadioListState,
         player: SharedPlayer,
         playback_controls: PlaybackControls,
+        spotify_callback_state: SharedSpotifyCallbackState,
     ) {
         controls.frame.on_menu_selected(move |event| {
             let result = match event.get_id() {
-                MENU_ID_SETTINGS => show_settings_dialog(controls, runtime.clone()),
+                MENU_ID_SETTINGS => show_settings_dialog(
+                    controls,
+                    runtime.clone(),
+                    radio_controls.integration_controls(),
+                    spotify_callback_state.clone(),
+                ),
                 MENU_ID_FOCUS_SEARCH => {
                     radio_controls.name.set_focus();
                     Ok("Search focused.".to_string())
@@ -626,6 +697,7 @@ pub mod wx {
         radio_state: SharedRadioListState,
         player: SharedPlayer,
         playback_controls: PlaybackControls,
+        spotify_callback_state: SharedSpotifyCallbackState,
     ) {
         {
             let runtime = runtime.clone();
@@ -897,6 +969,59 @@ pub mod wx {
         radio_controls.stop_tracking.on_click(move |_| {
             set_status(controls, "Playlist tracking is not running.");
         });
+        {
+            let runtime = runtime.clone();
+            radio_controls.connect_lastfm.on_click(move |_| {
+                report_action(
+                    controls,
+                    connect_lastfm_from_ui(
+                        controls,
+                        runtime.clone(),
+                        radio_controls.integration_controls(),
+                    ),
+                );
+            });
+        }
+        {
+            let runtime = runtime.clone();
+            radio_controls.finish_lastfm.on_click(move |_| {
+                report_action(
+                    controls,
+                    finish_lastfm_from_ui(
+                        controls,
+                        runtime.clone(),
+                        radio_controls.integration_controls(),
+                    ),
+                );
+            });
+        }
+        {
+            let runtime = runtime.clone();
+            radio_controls.lastfm_scrobbling.on_toggled(move |event| {
+                report_action(
+                    controls,
+                    set_lastfm_scrobbling(
+                        runtime.clone(),
+                        radio_controls.integration_controls(),
+                        event.is_checked(),
+                    ),
+                );
+            });
+        }
+        {
+            let runtime = runtime.clone();
+            radio_controls.connect_spotify.on_click(move |_| {
+                report_action(
+                    controls,
+                    connect_spotify_from_ui(
+                        controls,
+                        runtime.clone(),
+                        radio_controls.integration_controls(),
+                        spotify_callback_state.clone(),
+                    ),
+                );
+            });
+        }
         bind_frame_station_enter_handlers(
             controls,
             runtime,
@@ -974,6 +1099,353 @@ pub mod wx {
         } else {
             None
         }
+    }
+
+    fn connect_lastfm_from_ui(
+        controls: MainControls,
+        runtime: SharedRuntime,
+        integration_controls: IntegrationControls,
+    ) -> Result<String, String> {
+        let config = lastfm_app_config()
+            .ok_or_else(|| "Station Scout is missing its Last.fm app credentials.".to_string())?;
+        let (token, auth_url) = if config.proxy_url.is_empty() {
+            let client = LastFmClient::new(&config.api_key, &config.api_secret, "");
+            let token = client.request_token().map_err(|error| error.to_string())?;
+            let auth_url = client.auth_url(&token);
+            (token, auth_url)
+        } else {
+            LastFmProxyClient::new(&config.proxy_url, "")
+                .request_token()
+                .map_err(|error| error.to_string())?
+        };
+        {
+            let mut borrowed = runtime.borrow_mut();
+            let runtime = borrowed
+                .as_mut()
+                .ok_or_else(|| "Runtime unavailable.".to_string())?;
+            runtime.state.lastfm_pending_token = token;
+            runtime.save_settings()?;
+        }
+        refresh_integration_controls(runtime, integration_controls);
+        open_url(&auth_url)?;
+        controls.frame.set_status_text(
+            "Approve Station Scout in Last.fm, then choose Finish Last.fm.",
+            0,
+        );
+        Ok("Approve Station Scout in Last.fm, then choose Finish Last.fm.".to_string())
+    }
+
+    fn finish_lastfm_from_ui(
+        _controls: MainControls,
+        runtime: SharedRuntime,
+        integration_controls: IntegrationControls,
+    ) -> Result<String, String> {
+        let config = lastfm_app_config()
+            .ok_or_else(|| "Station Scout is missing its Last.fm app credentials.".to_string())?;
+        let pending_token = runtime
+            .borrow()
+            .as_ref()
+            .map(|runtime| runtime.state.lastfm_pending_token.clone())
+            .unwrap_or_default();
+        if pending_token.is_empty() {
+            return Err("Start Last.fm connection first.".to_string());
+        }
+        let (session_key, username) = if config.proxy_url.is_empty() {
+            LastFmClient::new(&config.api_key, &config.api_secret, "")
+                .create_session(&pending_token)
+                .map_err(|error| error.to_string())?
+        } else {
+            LastFmProxyClient::new(&config.proxy_url, "")
+                .create_session(&pending_token)
+                .map_err(|error| error.to_string())?
+        };
+        {
+            let mut borrowed = runtime.borrow_mut();
+            let runtime = borrowed
+                .as_mut()
+                .ok_or_else(|| "Runtime unavailable.".to_string())?;
+            runtime.state.lastfm_session_key = session_key;
+            runtime.state.lastfm_username = username.clone();
+            runtime.state.lastfm_enabled = true;
+            runtime.state.lastfm_scrobble_enabled = true;
+            runtime.state.lastfm_pending_token.clear();
+            runtime.save_settings()?;
+        }
+        refresh_integration_controls(runtime, integration_controls);
+        Ok(format!(
+            "Connected Last.fm as {}.",
+            if username.is_empty() {
+                "your account".to_string()
+            } else {
+                username
+            }
+        ))
+    }
+
+    fn set_lastfm_scrobbling(
+        runtime: SharedRuntime,
+        integration_controls: IntegrationControls,
+        enabled: bool,
+    ) -> Result<String, String> {
+        {
+            let mut borrowed = runtime.borrow_mut();
+            let runtime = borrowed
+                .as_mut()
+                .ok_or_else(|| "Runtime unavailable.".to_string())?;
+            runtime.state.lastfm_scrobble_enabled = enabled;
+            runtime.save_settings()?;
+        }
+        refresh_integration_controls(runtime, integration_controls);
+        Ok(format!(
+            "Last.fm scrobbling {}.",
+            if enabled { "enabled" } else { "disabled" }
+        ))
+    }
+
+    fn connect_spotify_from_ui(
+        _controls: MainControls,
+        runtime: SharedRuntime,
+        integration_controls: IntegrationControls,
+        callback_state: SharedSpotifyCallbackState,
+    ) -> Result<String, String> {
+        let config = spotify_app_config()
+            .ok_or_else(|| "Station Scout is missing its Spotify client ID.".to_string())?;
+        let (redirect_uri, receiver) = start_spotify_callback_server(&config.redirect_uri)?;
+        let auth_request =
+            build_spotify_auth_request(&config.client_id, &redirect_uri, DEFAULT_SCOPES);
+        {
+            let mut borrowed = runtime.borrow_mut();
+            let runtime = borrowed
+                .as_mut()
+                .ok_or_else(|| "Runtime unavailable.".to_string())?;
+            runtime.state.spotify_auth_state = auth_request.state;
+            runtime.state.spotify_code_verifier = auth_request.code_verifier;
+            runtime.save_settings()?;
+        }
+        {
+            let mut state = callback_state.borrow_mut();
+            state.redirect_uri = redirect_uri;
+            state.receiver = Some(receiver);
+        }
+        refresh_integration_controls(runtime, integration_controls);
+        open_url(&auth_request.url)?;
+        Ok("Approve Station Scout in Spotify. This window will finish automatically.".to_string())
+    }
+
+    fn install_spotify_callback_poller(
+        controls: MainControls,
+        runtime: SharedRuntime,
+        integration_controls: IntegrationControls,
+        callback_state: SharedSpotifyCallbackState,
+    ) {
+        let timer = Box::leak(Box::new(Timer::new(&controls.frame)));
+        timer.on_tick(move |_| {
+            let message = {
+                let mut state = callback_state.borrow_mut();
+                match state.receiver.as_ref().map(Receiver::try_recv) {
+                    Some(Ok(message)) => {
+                        state.receiver = None;
+                        Some(message)
+                    }
+                    Some(Err(TryRecvError::Disconnected)) => {
+                        state.receiver = None;
+                        None
+                    }
+                    Some(Err(TryRecvError::Empty)) | None => None,
+                }
+            };
+            if let Some(message) = message {
+                report_action(
+                    controls,
+                    finish_spotify_callback(
+                        controls,
+                        runtime.clone(),
+                        integration_controls,
+                        callback_state.clone(),
+                        message,
+                    ),
+                );
+            }
+        });
+        timer.start(250, false);
+    }
+
+    fn finish_spotify_callback(
+        _controls: MainControls,
+        runtime: SharedRuntime,
+        integration_controls: IntegrationControls,
+        callback_state: SharedSpotifyCallbackState,
+        message: SpotifyCallbackMessage,
+    ) -> Result<String, String> {
+        if !message.error.is_empty() {
+            return Err(format!("Spotify authorization failed: {}.", message.error));
+        }
+        if message.code.is_empty() || message.state.is_empty() {
+            return Err("Spotify authorization callback was incomplete.".to_string());
+        }
+        let config = spotify_app_config()
+            .ok_or_else(|| "Station Scout is missing its Spotify client ID.".to_string())?;
+        let redirect_uri = callback_state.borrow().redirect_uri.clone();
+        let shared_runtime = runtime.clone();
+        let mut borrowed = runtime.borrow_mut();
+        let runtime = borrowed
+            .as_mut()
+            .ok_or_else(|| "Runtime unavailable.".to_string())?;
+        if message.state != runtime.state.spotify_auth_state {
+            return Err("Spotify authorization state did not match.".to_string());
+        }
+        let client = SpotifyClient::new(
+            &config.client_id,
+            if redirect_uri.is_empty() {
+                &config.redirect_uri
+            } else {
+                &redirect_uri
+            },
+        );
+        let token_set = client
+            .exchange_code(&message.code, &runtime.state.spotify_code_verifier)
+            .map_err(|error| error.to_string())?;
+        runtime.state.spotify_access_token = token_set.access_token;
+        runtime.state.spotify_refresh_token = token_set.refresh_token;
+        runtime.state.spotify_token_expires_at = token_set.expires_at;
+        runtime.state.spotify_enabled = true;
+        runtime.state.spotify_auth_state.clear();
+        runtime.state.spotify_code_verifier.clear();
+        runtime.save_settings()?;
+        drop(borrowed);
+        let dialog_controls = {
+            let mut callback_state = callback_state.borrow_mut();
+            callback_state.redirect_uri.clear();
+            callback_state.dialog_controls
+        };
+        refresh_integration_controls(shared_runtime.clone(), integration_controls);
+        if let Some(dialog_controls) = dialog_controls {
+            refresh_integration_controls(shared_runtime, dialog_controls);
+        }
+        Ok("Connected Spotify.".to_string())
+    }
+
+    fn refresh_integration_controls(runtime: SharedRuntime, controls: IntegrationControls) {
+        let borrowed = runtime.borrow();
+        let Some(runtime) = borrowed.as_ref() else {
+            return;
+        };
+        let (lastfm_status, lastfm_action, show_finish) =
+            lastfm_settings_view_state(&runtime.state);
+        controls.lastfm_status.set_label(&lastfm_status);
+        controls.connect_lastfm.set_label(&lastfm_action);
+        controls.finish_lastfm.show(show_finish);
+        controls
+            .lastfm_scrobbling
+            .set_value(runtime.state.lastfm_scrobble_enabled);
+        controls
+            .lastfm_scrobbling
+            .enable(runtime.state.lastfm_enabled);
+        controls
+            .spotify_status
+            .set_label(if runtime.state.spotify_enabled {
+                "Connected."
+            } else {
+                "Not connected."
+            });
+    }
+
+    fn start_spotify_callback_server(
+        redirect_uri: &str,
+    ) -> Result<(String, Receiver<SpotifyCallbackMessage>), String> {
+        let parsed = url::Url::parse(redirect_uri).map_err(|error| error.to_string())?;
+        let host = parsed.host_str().unwrap_or("127.0.0.1");
+        let port = parsed.port().unwrap_or(0);
+        let path = parsed.path().to_string();
+        let listener = TcpListener::bind((host, port)).map_err(|error| error.to_string())?;
+        let actual_port = listener
+            .local_addr()
+            .map_err(|error| error.to_string())?
+            .port();
+        let (sender, receiver) = mpsc::channel();
+        let callback_path = path.clone();
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let message = read_spotify_callback_message(&mut stream, &callback_path);
+                let body = if message.error.is_empty() {
+                    "Station Scout is connected to Spotify. You can close this tab."
+                } else {
+                    "Spotify authorization failed. You can close this tab."
+                };
+                let _ = respond_http_ok(&mut stream, body);
+                let _ = sender.send(message);
+            }
+        });
+        Ok((
+            format!(
+                "{}://{}:{}{}",
+                parsed.scheme(),
+                host,
+                actual_port,
+                if path.is_empty() { "/" } else { &path }
+            ),
+            receiver,
+        ))
+    }
+
+    fn read_spotify_callback_message(
+        stream: &mut TcpStream,
+        expected_path: &str,
+    ) -> SpotifyCallbackMessage {
+        let mut buffer = [0_u8; 4096];
+        let read = stream.read(&mut buffer).unwrap_or(0);
+        let request = String::from_utf8_lossy(&buffer[..read]);
+        let target = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or("/");
+        let url = url::Url::parse(&format!("http://127.0.0.1{target}")).ok();
+        let path_matches = url.as_ref().is_some_and(|url| url.path() == expected_path);
+        if !path_matches {
+            return SpotifyCallbackMessage {
+                code: String::new(),
+                state: String::new(),
+                error: "Unexpected callback path".to_string(),
+            };
+        }
+        let mut code = String::new();
+        let mut state = String::new();
+        let mut error = String::new();
+        if let Some(url) = url {
+            for (key, value) in url.query_pairs() {
+                match key.as_ref() {
+                    "code" => code = value.into_owned(),
+                    "state" => state = value.into_owned(),
+                    "error" => error = value.into_owned(),
+                    _ => {}
+                }
+            }
+        }
+        SpotifyCallbackMessage { code, state, error }
+    }
+
+    fn respond_http_ok(stream: &mut TcpStream, body: &str) -> std::io::Result<()> {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes())
+    }
+
+    fn open_url(url: &str) -> Result<(), String> {
+        #[cfg(target_os = "windows")]
+        let result = Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
+            .spawn();
+        #[cfg(target_os = "macos")]
+        let result = Command::new("open").arg(url).spawn();
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let result = Command::new("xdg-open").arg(url).spawn();
+        result
+            .map(|_| ())
+            .map_err(|error| format!("Could not open browser: {error}"))
     }
 
     fn search_radio(
@@ -1500,42 +1972,109 @@ pub mod wx {
     fn show_settings_dialog(
         controls: MainControls,
         runtime: SharedRuntime,
+        main_integration_controls: IntegrationControls,
+        callback_state: SharedSpotifyCallbackState,
     ) -> Result<String, String> {
-        let message = {
+        let folder = {
             let borrowed = runtime.borrow();
-            let runtime = borrowed
+            borrowed
                 .as_ref()
-                .ok_or_else(|| "Runtime unavailable.".to_string())?;
-            let (lastfm_status, lastfm_action, show_finish) =
-                lastfm_settings_view_state(&runtime.state);
-            let spotify_status = if runtime.state.spotify_enabled {
-                "Connected."
-            } else {
-                "Not connected."
-            };
-            let finish_lastfm = if show_finish {
-                "\nFinish Last.fm: available after browser approval"
-            } else {
-                ""
-            };
-            format!(
-                "Playlist logs\nFolder: {}\n\nLast.fm\nStatus: {}\nScrobbling: {}\nAction: {}{}\n\nSpotify\nStatus: {}\nAction: Connect Spotify",
-                runtime.track_log_folder.display(),
-                lastfm_status,
-                if runtime.state.lastfm_scrobble_enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                },
-                lastfm_action,
-                finish_lastfm,
-                spotify_status
-            )
+                .ok_or_else(|| "Runtime unavailable.".to_string())?
+                .track_log_folder
+                .display()
+                .to_string()
         };
-        let dialog = MessageDialog::builder(&controls.frame, &message, "Station Scout settings")
-            .with_style(MessageDialogStyle::OK | MessageDialogStyle::IconInformation)
+        let dialog = Dialog::builder(&controls.frame, "Station Scout settings")
+            .with_style(DialogStyle::DefaultDialogStyle | DialogStyle::ResizeBorder)
             .build();
+        let root = BoxSizer::builder(Orientation::Vertical).build();
+
+        let folder_row = BoxSizer::builder(Orientation::Horizontal).build();
+        add_label(&dialog, &folder_row, "Playlist log folder");
+        let folder_text = StaticText::builder(&dialog).with_label(&folder).build();
+        describe_control(&folder_text, "Playlist log folder");
+        folder_row.add(&folder_text, 1, SizerFlag::All | SizerFlag::Expand, 4);
+        root.add_sizer(&folder_row, 0, SizerFlag::Expand, 0);
+
+        let dialog_integration_controls = add_lastfm_settings(&dialog, &root);
+        refresh_integration_controls(runtime.clone(), dialog_integration_controls);
+        callback_state.borrow_mut().dialog_controls = Some(dialog_integration_controls);
+
+        {
+            let runtime = runtime.clone();
+            dialog_integration_controls
+                .connect_lastfm
+                .on_click(move |_| {
+                    report_action(
+                        controls,
+                        connect_lastfm_from_ui(
+                            controls,
+                            runtime.clone(),
+                            dialog_integration_controls,
+                        ),
+                    );
+                    refresh_integration_controls(runtime.clone(), main_integration_controls);
+                });
+        }
+        {
+            let runtime = runtime.clone();
+            dialog_integration_controls
+                .finish_lastfm
+                .on_click(move |_| {
+                    report_action(
+                        controls,
+                        finish_lastfm_from_ui(
+                            controls,
+                            runtime.clone(),
+                            dialog_integration_controls,
+                        ),
+                    );
+                    refresh_integration_controls(runtime.clone(), main_integration_controls);
+                });
+        }
+        {
+            let runtime = runtime.clone();
+            dialog_integration_controls
+                .lastfm_scrobbling
+                .on_toggled(move |event| {
+                    report_action(
+                        controls,
+                        set_lastfm_scrobbling(
+                            runtime.clone(),
+                            dialog_integration_controls,
+                            event.is_checked(),
+                        ),
+                    );
+                    refresh_integration_controls(runtime.clone(), main_integration_controls);
+                });
+        }
+        {
+            let runtime = runtime.clone();
+            let callback_state_for_button = callback_state.clone();
+            dialog_integration_controls
+                .connect_spotify
+                .on_click(move |_| {
+                    report_action(
+                        controls,
+                        connect_spotify_from_ui(
+                            controls,
+                            runtime.clone(),
+                            dialog_integration_controls,
+                            callback_state_for_button.clone(),
+                        ),
+                    );
+                    refresh_integration_controls(runtime.clone(), main_integration_controls);
+                });
+        }
+
+        let button_row = BoxSizer::builder(Orientation::Horizontal).build();
+        let close = add_button(&dialog, &button_row, "Close");
+        close.on_click(move |_| dialog.end_modal(ID_OK));
+        root.add_sizer(&button_row, 0, SizerFlag::All, 4);
+
+        dialog.set_sizer_and_fit(root, true);
         dialog.show_modal();
+        callback_state.borrow_mut().dialog_controls = None;
         Ok("Settings opened.".to_string())
     }
 
@@ -2059,7 +2598,7 @@ pub mod wx {
         let station_actions = add_station_actions(&panel, &column);
         let search_controls = add_podcast_search(&panel, &column);
         add_podcast_settings(&panel, &column);
-        add_lastfm_settings(&panel, &column);
+        let integration_controls = add_lastfm_settings(&panel, &column);
         let station_results = add_station_results(&panel, &column);
         let saved_lists = add_radio_saved_lists(&panel, &column);
         let notebook_controls = add_podcast_notebook(&panel, &column);
@@ -2083,6 +2622,12 @@ pub mod wx {
                 add_timer: station_actions.add_timer,
                 start_tracking: station_actions.start_tracking,
                 stop_tracking: station_actions.stop_tracking,
+                lastfm_status: integration_controls.lastfm_status,
+                lastfm_scrobbling: integration_controls.lastfm_scrobbling,
+                connect_lastfm: integration_controls.connect_lastfm,
+                finish_lastfm: integration_controls.finish_lastfm,
+                spotify_status: integration_controls.spotify_status,
+                connect_spotify: integration_controls.connect_spotify,
                 station_results,
                 favorites: saved_lists.favorites,
                 recents: saved_lists.recents,
@@ -2322,7 +2867,7 @@ pub mod wx {
         root.add_sizer(&playback_row, 0, SizerFlag::Expand, 0);
     }
 
-    fn add_lastfm_settings(parent: &Panel, root: &BoxSizer) {
+    fn add_lastfm_settings<W: WxWidget>(parent: &W, root: &BoxSizer) -> IntegrationControls {
         let row = BoxSizer::builder(Orientation::Horizontal).build();
 
         add_label(parent, &row, "Last.fm status");
@@ -2336,6 +2881,7 @@ pub mod wx {
         let scrobbling = CheckBox::builder(parent).build();
         describe_control(&scrobbling, "Scrobble played songs to Last.fm");
         scrobbling.set_value(true);
+        scrobbling.enable(false);
         row.add(
             &scrobbling,
             0,
@@ -2343,7 +2889,27 @@ pub mod wx {
             4,
         );
 
+        let connect_lastfm = add_button(parent, &row, "Connect Last.fm");
+        let finish_lastfm = add_button(parent, &row, "Finish Last.fm");
+        finish_lastfm.show(false);
+
+        add_label(parent, &row, "Spotify status");
+        let spotify_status = StaticText::builder(parent)
+            .with_label("Not connected.")
+            .build();
+        describe_control(&spotify_status, "Spotify connection status");
+        row.add(&spotify_status, 1, SizerFlag::All | SizerFlag::Expand, 4);
+        let connect_spotify = add_button(parent, &row, "Connect Spotify");
+
         root.add_sizer(&row, 0, SizerFlag::Expand, 0);
+        IntegrationControls {
+            lastfm_status: status,
+            lastfm_scrobbling: scrobbling,
+            connect_lastfm,
+            finish_lastfm,
+            spotify_status,
+            connect_spotify,
+        }
     }
 
     fn add_station_results(parent: &Panel, root: &BoxSizer) -> ListCtrl {
@@ -2689,18 +3255,23 @@ pub mod wx {
         }
     }
 
-    fn add_button(parent: &Panel, row: &BoxSizer, label: &str) -> Button {
+    fn add_button<W: WxWidget>(parent: &W, row: &BoxSizer, label: &str) -> Button {
         add_named_button(parent, row, label, label)
     }
 
-    fn add_named_button(parent: &Panel, row: &BoxSizer, label: &str, name: &str) -> Button {
+    fn add_named_button<W: WxWidget>(
+        parent: &W,
+        row: &BoxSizer,
+        label: &str,
+        name: &str,
+    ) -> Button {
         let button = Button::builder(parent).with_label(label).build();
         describe_control(&button, name);
         row.add(&button, 0, SizerFlag::All, 4);
         button
     }
 
-    fn add_label(parent: &Panel, row: &BoxSizer, label: &str) {
+    fn add_label<W: WxWidget>(parent: &W, row: &BoxSizer, label: &str) {
         let text = StaticText::builder(parent).with_label(label).build();
         text.set_name(label);
         row.add(&text, 0, SizerFlag::All, 4);

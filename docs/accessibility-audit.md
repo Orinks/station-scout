@@ -1,37 +1,30 @@
-# Station Scout wxPython Accessibility Audit
+# Station Scout wxDragon Accessibility Notes
 
-Date: 2026-05-09
+Date: 2026-05-28
 
-Scope: `src/station_scout/app.py`
+Scope: `rust/src/ui.rs`
 
-| # | Rule | Severity | File | Description | Resolution |
-| --- | --- | --- | --- | --- | --- |
-| 1 | WX-A11Y-002 | Critical | `src/station_scout/app.py` | The main frame had no accelerator table, so core actions depended on tabbing or pointer interaction. | Added a menu bar and accelerators for search focus, playback, stop, timers, tracking, and settings. |
-| 2 | WX-A11Y-003 | Critical | `src/station_scout/app.py` | Favorites and recent stations only supported double-click activation. | Added Enter-key activation for the focused favorites or recents list. |
-| 3 | WX-A11Y-004 | Serious | `src/station_scout/app.py` | The timer dialog used nonstandard dialog buttons and did not explicitly handle Escape. | Switched to `CreateStdDialogButtonSizer` and added Escape-to-cancel handling. |
-| 4 | WX-A11Y-005 | Serious | `src/station_scout/app.py` | The timer dialog opened without setting a meaningful initial focus. | Focus now starts on the time picker. |
-| 5 | Navigation noise | Serious | `src/station_scout/app.py` | Last.fm, Spotify, and log-folder controls were mixed into the main station search surface. | Moved those controls into a dedicated Settings dialog with grouped sections and its own Escape handling. |
+Station Scout now uses the Rust wxDragon frontend. The UI keeps the wx accessibility convention:
+create each visible label immediately before its matching text box, choice, list, or other named
+control unless Rust or wxDragon API constraints make that impossible.
 
-Verification:
+## Preserved Rules
 
-- `uv run ruff check .`
-- `uv run pytest`
-- `uv run python -m build`
-- `uv run python -c "from station_scout.app import StationScoutFrame, SettingsDialog, TimerDialog; print('ui imports ok')"`
+| Rule | Status | Notes |
+| --- | --- | --- |
+| WX-A11Y-001 label-before-control order | Preserved | Radio, podcast, queue, notification, settings, and dialog controls are modeled in the Rust UI blueprint and constructed in label-first order. |
+| WX-A11Y-002 keyboard access | Preserved | Primary radio and podcast commands are exposed as buttons and menu/accelerator actions in the wxDragon frame. |
+| WX-A11Y-003 list activation | Preserved | Station, favorites, recent, podcast search, subscription, episode, queue, and inbox lists all have explicit action buttons for keyboard users. |
+| WX-A11Y-004 standard dialogs | Preserved | Rust dialogs use standard wx dialog patterns where wxDragon exposes them. |
+| WX-A11Y-005 meaningful initial focus | Preserved | The UI blueprint identifies the initial focus target and startup surface. |
 
-Manual screen reader testing is still needed once the next runnable build is exercised with NVDA on Windows and VoiceOver on macOS.
+## Verification
 
-## Follow-up Label-Order Pass
+```powershell
+cargo fmt --check
+cargo test
+cargo check --bin station-scout --features gui
+```
 
-Date: 2026-05-09
-
-The second pass focused on controls that looked labeled visually but were still likely to be announced as unlabeled by screen readers because the native wx creation order placed the edit/list control before the `wx.StaticText` label.
-
-| # | Rule | Severity | File | Description | Resolution |
-| --- | --- | --- | --- | --- | --- |
-| 1 | WX-A11Y-001 | Critical | `src/station_scout/app.py` | Search source and search edit boxes were created before their labels. | Reordered construction so each label is created immediately before its matching input/select. |
-| 2 | WX-A11Y-001 | Critical | `src/station_scout/app.py` | Station results, favorites, recents, and timers did not have reliable label-before-control order. | Added/reordered static labels immediately before each list control. |
-| 3 | WX-A11Y-001 | Serious | `src/station_scout/app.py` | The timer dialog show-name edit box was created before its label. | Created the show-name label before the edit box and kept them adjacent in the sizer. |
-| 4 | WX-A11Y-001 | Moderate | `src/station_scout/app.py` | The Settings playlist-log folder edit box label was not in the same immediate row. | Reworked the folder row to label, edit box, then choose-folder button. |
-
-Additional fallback help text/tooltips were added to labeled controls, but those are secondary to the label-before-control wx ordering.
+Manual screen reader testing is still needed once the next runnable Rust build is exercised with
+NVDA on Windows.

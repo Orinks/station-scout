@@ -1,11 +1,6 @@
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.ruff_cache/
 .env
 .env*.local
-build/
+.deps/
 dist/
-*.egg-info/
+target/
 station_scout.json

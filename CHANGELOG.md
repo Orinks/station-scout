@@ -4,6 +4,11 @@ All notable user-facing changes to Station Scout are tracked here.
 
 ## [Unreleased]
 
+### Added
+
+- Rebuilt Station Scout as a Rust desktop app with native GStreamer playback for radio stations and podcasts.
+- Restored Last.fm and Spotify sign-in flows in the Rust app, including browser approval and saved account state.
+
 ### Fixed
 
 - Improved Spotify playlist export after tracking sessions so stale credentials refresh automatically when possible and clearly ask the listener to reconnect Spotify when authorization has expired.

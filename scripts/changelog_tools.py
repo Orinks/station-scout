@@ -9,11 +9,12 @@ from pathlib import Path
 
 CHANGELOG_PATH = Path("CHANGELOG.md")
 USER_FACING_PATH_PREFIXES = (
-    "src/",
+    "rust/",
     "installer/",
 )
 USER_FACING_PATHS = {
-    "pyproject.toml",
+    "Cargo.toml",
+    "Cargo.lock",
 }
 USER_FACING_SUFFIXES = (".spec",)
 SECTION_ORDER = ("Added", "Changed", "Fixed", "Improved", "Removed", "Deprecated", "Security")

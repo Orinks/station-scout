@@ -1,18 +1,18 @@
 ; Inno Setup Script for Station Scout
-; Requires Nuitka output in dist/StationScout_dir/.
+; Requires the Rust release executable copied to dist/windows/.
 
 #define MyAppName "Station Scout"
 #ifndef MyAppVersion
   #ifexist "..\dist\version.txt"
     #define MyAppVersion ReadIni("..\dist\version.txt", "version", "value", "")
   #else
-    #error Missing dist/version.txt; run installer/build_nuitka.py before compiling the installer.
+    #error Missing dist/version.txt; run cargo build --release --features gui and write dist/version.txt before compiling the installer.
   #endif
 #endif
 #define MyAppPublisher "Orinks"
 #define MyAppURL "https://github.com/Orinks/station-scout"
 #define MyAppExeName "StationScout.exe"
-#define MyAppDescription "Accessible desktop internet radio explorer"
+#define MyAppDescription "Accessible desktop internet radio and podcast explorer"
 
 [Setup]
 AppId={{4ED3D1AB-942D-4E30-9639-4BB68637A19C}
@@ -52,7 +52,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "quicklaunchicon"; Description: "{cm:CreateQuickLaunchIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\dist\StationScout_dir\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\windows\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Comment: "{#MyAppDescription}"
@@ -68,5 +68,3 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\{#MyApp
 
 [UninstallDelete]
 Type: files; Name: "{app}\*.log"
-Type: files; Name: "{app}\*.pyc"
-Type: dirifempty; Name: "{app}\__pycache__"

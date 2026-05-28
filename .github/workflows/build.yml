@@ -2,8 +2,8 @@ name: Build
 
 on:
   schedule:
-    # Nightly at 02:17 UTC (10:17 PM EDT / 9:17 PM EST).
-    # GitHub Actions schedules are UTC-only and can queue late, so avoid :00/:30.
+    # Publish a nightly build every night from dev when user-facing files changed
+    # since the previous nightly tag.
     - cron: "17 2 * * *"
   push:
     tags: ["v*.*.*"]
@@ -15,15 +15,19 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 env:
-  PYTHON_VERSION: "3.12"
-  NUITKA_CACHE_DIR: ${{ github.workspace }}/.nuitka-cache
+  CARGO_TERM_COLOR: always
 
 jobs:
   prepare:
@@ -44,7 +48,7 @@ jobs:
       - name: Check build conditions
         id: check
         run: |
-          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "is_nightly=false" >> "$GITHUB_OUTPUT"
@@ -66,9 +70,10 @@ jobs:
               echo "should_build=true" >> "$GITHUB_OUTPUT"
             else
               USER_FACING_PATHS=$(git diff --name-only "$LAST_TAG"..HEAD -- \
-                src/ \
-                installer/ \
-                pyproject.toml | sed '/^$/d')
+                Cargo.toml \
+                Cargo.lock \
+                rust/ \
+                installer/ | sed '/^$/d')
               if [ -n "$USER_FACING_PATHS" ]; then
                 echo "should_build=true" >> "$GITHUB_OUTPUT"
               else
@@ -82,49 +87,42 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.should_build == 'true'
     runs-on: windows-latest
-    timeout-minutes: 210
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
       - uses: actions/cache@v5
         with:
           path: |
-            ~/.cache/pip
-            ~/Library/Caches/pip
-            ~\AppData\Local\pip\Cache
-          key: pip-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: cargo-windows-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            pip-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-            pip-${{ runner.os }}-
-
-      - uses: actions/cache/restore@v5
-        with:
-          path: .nuitka-cache
-          key: nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'installer/build_nuitka.py') }}-${{ github.run_id }}
-          restore-keys: |
-            nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'installer/build_nuitka.py') }}-
-            nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install --only-binary wxPython wxPython
-          pip install -e .
-          pip install nuitka ordered-set zstandard
+            cargo-windows-
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
+      - name: Install GStreamer
+        run: ./scripts/install-gstreamer-windows.ps1 -InstallDir "$env:RUNNER_TEMP\gstreamer"
+
       - name: Build
-        timeout-minutes: 180
-        run: python installer/build_nuitka.py --tag "${{ needs.prepare.outputs.is_nightly == 'true' && needs.prepare.outputs.tag || '' }}"
+        run: |
+          cargo build --release --features gui
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          Copy-Item target/release/station-scout.exe dist/windows/StationScout.exe
+          "[version]`nvalue=${{ needs.prepare.outputs.version }}" | Set-Content dist/version.txt
+          Compress-Archive -Path dist/windows/* -DestinationPath "dist/StationScout_Portable_${{ needs.prepare.outputs.version }}.zip" -Force
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer/station-scout.iss
 
       - uses: actions/upload-artifact@v7
         with:
@@ -133,193 +131,10 @@ jobs:
             dist/StationScout_Setup_*.exe
             dist/StationScout_Portable_*.zip
 
-      - uses: actions/cache/save@v5
-        if: always()
-        with:
-          path: .nuitka-cache
-          key: nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'installer/build_nuitka.py') }}-${{ github.run_id }}
-
-  build-macos:
-    name: macOS
-    needs: prepare
-    if: needs.prepare.outputs.should_build == 'true'
-    runs-on: macos-15-intel
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cache/pip
-            ~/Library/Caches/pip
-            ~\AppData\Local\pip\Cache
-          key: pip-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
-          restore-keys: |
-            pip-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-            pip-${{ runner.os }}-
-
-      - uses: actions/cache/restore@v5
-        with:
-          path: .nuitka-cache
-          key: nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'installer/build_nuitka.py') }}-${{ github.run_id }}
-          restore-keys: |
-            nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'installer/build_nuitka.py') }}-
-            nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-
-      - name: Install ccache
-        run: brew install ccache
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install --only-binary wxPython wxPython
-          pip install -e .
-          pip install nuitka ordered-set zstandard
-
-      - name: Build
-        timeout-minutes: 45
-        run: python installer/build_nuitka.py --tag "${{ needs.prepare.outputs.is_nightly == 'true' && needs.prepare.outputs.tag || '' }}"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: macos
-          path: dist/StationScout_macOS_*.zip
-
-      - uses: actions/cache/save@v5
-        if: always()
-        with:
-          path: .nuitka-cache
-          key: nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'installer/build_nuitka.py') }}-${{ github.run_id }}
-
-  build-linux:
-    name: Linux
-    needs: prepare
-    if: needs.prepare.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cache/pip
-            ~/Library/Caches/pip
-            ~\AppData\Local\pip\Cache
-          key: pip-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
-          restore-keys: |
-            pip-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-            pip-${{ runner.os }}-
-
-      - uses: actions/cache/restore@v5
-        with:
-          path: .nuitka-cache
-          key: nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'installer/build_nuitka.py') }}-${{ github.run_id }}
-          restore-keys: |
-            nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'installer/build_nuitka.py') }}-
-            nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ccache \
-            libgtk-3-dev \
-            libnotify-dev \
-            libsdl2-dev \
-            libwebkit2gtk-4.1-dev \
-            freeglut3-dev \
-            xvfb
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install \
-            -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 \
-            --only-binary wxPython \
-            wxPython
-          pip install -e .
-          pip install nuitka ordered-set zstandard
-
-      - name: Build
-        timeout-minutes: 70
-        run: python installer/build_nuitka.py --tag "${{ needs.prepare.outputs.is_nightly == 'true' && needs.prepare.outputs.tag || '' }}"
-
-      - name: Smoke test packaged app
-        env:
-          XDG_DATA_HOME: ${{ runner.temp }}/station-scout-data
-          XDG_CONFIG_HOME: ${{ runner.temp }}/station-scout-config
-        run: |
-          set +e
-          timeout 25s xvfb-run -a dist/StationScout/StationScout > linux-smoke.log 2>&1
-          status=$?
-          set -e
-          cat linux-smoke.log
-          if grep -E "cannot register existing type 'G(Task|AsyncResult|InputStream|Seekable|PollableInputStream)'|GLib-GObject-CRITICAL" linux-smoke.log; then
-            echo "Packaged Linux app hit the GLib/GIO duplicate type-registration crash."
-            exit 1
-          fi
-          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-            echo "Packaged Linux app exited unexpectedly with status $status."
-            exit "$status"
-          fi
-
-      - name: Verify Linux tarball avoids bundled OpenSSL
-        run: |
-          tarball=$(find dist -maxdepth 1 -name 'StationScout_Linux_*.tar.gz' -print -quit)
-          if [ -z "$tarball" ]; then
-            echo "Linux tarball was not created."
-            exit 1
-          fi
-          if tar -tzf "$tarball" | grep -E '(^|/)lib(ssl|crypto)\.so'; then
-            echo "Linux tarball must not bundle OpenSSL libraries; use the target system OpenSSL instead."
-            exit 1
-          fi
-
-      - name: Verify Linux tarball includes sound_lib x64 libraries
-        run: |
-          tarball=$(find dist -maxdepth 1 -name 'StationScout_Linux_*.tar.gz' -print -quit)
-          if [ -z "$tarball" ]; then
-            echo "Linux tarball was not created."
-            exit 1
-          fi
-          for lib in libbass.so libbassmix.so libbassopus.so libtags.so; do
-            if ! tar -tzf "$tarball" | grep -qx "StationScout/sound_lib/lib/x64/$lib"; then
-              echo "Linux tarball is missing sound_lib/lib/x64/$lib."
-              exit 1
-            fi
-          done
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: linux
-          path: dist/StationScout_Linux_*.tar.gz
-
-      - uses: actions/cache/save@v5
-        if: always()
-        with:
-          path: .nuitka-cache
-          key: nuitka-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('pyproject.toml', 'installer/build_nuitka.py') }}-${{ github.run_id }}
-
   release:
     name: Release
-    needs: [prepare, build-windows, build-macos, build-linux]
-    if: always() && needs.prepare.outputs.should_build == 'true' && (needs.build-windows.result == 'success' || needs.build-macos.result == 'success' || needs.build-linux.result == 'success')
+    needs: [prepare, build-windows]
+    if: always() && needs.prepare.outputs.should_build == 'true' && needs.build-windows.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -328,46 +143,39 @@ jobs:
           ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
-        continue-on-error: true
+      - name: Download artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir dist
 
       - name: Prepare release
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IS_NIGHTLY: ${{ needs.prepare.outputs.is_nightly }}
-          VERSION: ${{ needs.prepare.outputs.version }}
           TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           mkdir -p assets
           TIMESTAMP=$(date -u +%Y%m%d)
 
-          for f in dist/*.exe dist/*.zip dist/*.tar.gz; do
-            [ -f "$f" ] || continue
+          while IFS= read -r f; do
             name=$(basename "$f")
             if [ "$IS_NIGHTLY" = "true" ]; then
               case "$name" in
                 *Setup*.exe) mv "$f" "assets/StationScout-nightly-${TIMESTAMP}-windows-setup.exe" ;;
                 *Portable*.zip) mv "$f" "assets/StationScout-nightly-${TIMESTAMP}-windows-portable.zip" ;;
-                *macOS*.zip) mv "$f" "assets/StationScout-nightly-${TIMESTAMP}-macOS.zip" ;;
-                *Linux*.tar.gz) mv "$f" "assets/StationScout-nightly-${TIMESTAMP}-linux.tar.gz" ;;
               esac
             else
               case "$name" in
                 *Setup*.exe) mv "$f" "assets/StationScout-${VERSION}-windows-setup.exe" ;;
                 *Portable*.zip) mv "$f" "assets/StationScout-${VERSION}-windows-portable.zip" ;;
-                *macOS*.zip) mv "$f" "assets/StationScout-${VERSION}-macOS.zip" ;;
-                *Linux*.tar.gz) mv "$f" "assets/StationScout-${VERSION}-linux.tar.gz" ;;
               esac
             fi
-          done
+          done < <(find dist -type f \( -name '*.exe' -o -name '*.zip' \))
 
           cd assets && sha256sum * > checksums.txt 2>/dev/null || true
-
           cd ..
 
-          # Generate release notes from curated CHANGELOG.md entries.
           if [ "$IS_NIGHTLY" = "true" ]; then
             LAST_TAG=$(git tag --list "nightly-*" --sort=-version:refname | head -1)
             if [ -n "$LAST_TAG" ]; then

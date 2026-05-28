@@ -1,24 +1,60 @@
 {
   "version": 1,
-  "createdAt": "2026-05-09T13:52:58.497Z",
-  "updatedAt": "2026-05-09T13:59:44.650Z",
+  "createdAt": "2026-05-14T04:13:40.622Z",
+  "updatedAt": "2026-05-14T13:24:16.595Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
   "codexGoalMode": "aggregate",
   "goals": [
     {
-      "id": "G001-create-station-scout-v1-as-a-private",
-      "title": "Create Station Scout V1 as a private GitHub repo under C:\\Users\\joshu...",
-      "objective": "Create Station Scout V1 as a private GitHub repo under C:\\Users\\joshu\\gh-projects. Station Scout is a desktop Radio Browser explorer with player, tray support, notifications, and per-station tune-in timers. Implement a small but working V1, verify locally, and commit meaningful milestones before pushing to a private Orinks/station-scout repository.",
+      "id": "G001-browse-facet-data-layer",
+      "title": "Browse facet data layer",
+      "objective": "Add Radio Browser-backed browse/facet data support for genres/tags, countries/locations, and languages. Prefer cleaned, count-aware browse lists over raw noisy dumps, and preserve existing text search behavior.",
       "status": "complete",
       "attempt": 1,
-      "createdAt": "2026-05-09T13:52:58.497Z",
-      "updatedAt": "2026-05-09T13:59:44.650Z",
-      "startedAt": "2026-05-09T13:53:02.629Z",
-      "completedAt": "2026-05-09T13:59:44.650Z",
-      "evidence": "Created private GitHub repo https://github.com/Orinks/station-scout; pushed milestone commits a4b5d4b,d99537a,6cc81c3,cd493c5; local pytest 7 passed; Ruff passed; editable install passed; GitHub CI run 25602903674 passed."
+      "createdAt": "2026-05-14T04:13:40.622Z",
+      "updatedAt": "2026-05-14T13:17:04.867Z",
+      "startedAt": "2026-05-14T13:15:08.144Z",
+      "completedAt": "2026-05-14T13:17:04.867Z",
+      "evidence": "Implemented BrowseFacet model plus RadioBrowserClient browse_facets and browse_stations data-layer methods. Verification: uv run pytest tests\\\\test_radio_browser.py tests\\\\test_models.py (9 passed); uv run pytest (82 passed); uv run ruff check .; live Radio Browser facet smoke returned location/genre/language rows."
+    },
+    {
+      "id": "G002-quality-scoring-and-station-ranking",
+      "title": "Quality scoring and station ranking",
+      "objective": "Create deterministic quality labeling/ranking that uses working status, bitrate, codec, click trend/popularity, and station metadata so discovery favors reliable high-quality streams without AI recommendations.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-14T04:13:40.622Z",
+      "updatedAt": "2026-05-14T13:18:35.278Z",
+      "startedAt": "2026-05-14T13:17:13.587Z",
+      "completedAt": "2026-05-14T13:18:35.278Z",
+      "evidence": "Implemented deterministic discovery_quality_score/discovery_quality_label on Station and discovery_sorted browse result ordering. Verification: uv run pytest tests\\\\test_radio_browser.py tests\\\\test_models.py (11 passed); uv run pytest (84 passed); uv run ruff check ."
+    },
+    {
+      "id": "G003-accessible-browse-ui-integration",
+      "title": "Accessible browse UI integration",
+      "objective": "Design and implement the exact wxPython browse UI shape, delegated to OMX, as long as it is keyboard-first, screen-reader friendly, and lets users browse genre, location, and language paths into playable station results.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-14T04:13:40.622Z",
+      "updatedAt": "2026-05-14T13:20:37.031Z",
+      "startedAt": "2026-05-14T13:18:41.745Z",
+      "completedAt": "2026-05-14T13:20:37.031Z",
+      "evidence": "Implemented keyboard-first Browse Stations panel with category choice, load choices, browse choices, and Browse selected action wired into existing station results/playback flow. Verification: uv run pytest tests\\\\test_app.py tests\\\\test_radio_browser.py tests\\\\test_models.py (22 passed); uv run pytest (84 passed); uv run ruff check ."
+    },
+    {
+      "id": "G004-end-to-end-discovery-verification",
+      "title": "End-to-end discovery verification",
+      "objective": "Add focused tests for browse query/list behavior, quality ranking/labeling, accessible UI expectations, and regression coverage for existing search and playback flows; verify with uv run pytest and uv run ruff check .",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-14T04:13:40.622Z",
+      "updatedAt": "2026-05-14T13:24:16.595Z",
+      "startedAt": "2026-05-14T13:20:50.326Z",
+      "evidence": "Implemented and verified Station Scout discovery browsing end to end: BrowseFacet data layer, quality scoring/ranking, accessible Browse Stations UI, focused tests, full verification, cleanup pass, and clean code review. Verification: uv run pytest (84 passed); uv run ruff check .; uv run python -m build; git diff --check; live Radio Browser browse smoke.",
+      "completedAt": "2026-05-14T13:24:16.595Z"
     }
   ],
-  "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-create-station-scout-v1-as-a-private Create Station Scout V1 as a private GitHub repo under C:\\Users\\joshu..."
+  "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-browse-facet-data-layer Browse facet data layer; G002-quality-scoring-and-station-ranking Quality scoring and station ranking; G003-accessible-browse-ui-integration Accessible browse UI integration; G004-end-to-end-discovery-verification End-to-end discovery verification"
 }

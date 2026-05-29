@@ -270,7 +270,7 @@ pub fn playback_window_title(now_playing: &str) -> String {
 #[cfg(feature = "gui")]
 pub mod wx {
     use super::{
-        APP_TITLE, UiStartupState, startup_state_for_podcast_subscriptions,
+        APP_TITLE, UiStartupState, playback_window_title, startup_state_for_podcast_subscriptions,
         station_scout_ui_blueprint, view_switch_for,
     };
     use crate::integrations_config::{lastfm_app_config, spotify_app_config};
@@ -383,6 +383,7 @@ pub mod wx {
 
     #[derive(Clone, Copy)]
     struct PlaybackControls {
+        frame: Frame,
         title: StaticText,
         status: StaticText,
         stop: Button,
@@ -530,7 +531,7 @@ pub mod wx {
 
         let first_run_controls = add_first_run_panel(&panel, &root, startup);
         let (radio_controls, podcast_controls, playback_controls, views) =
-            add_main_workspace(&panel, &root, startup);
+            add_main_workspace(&panel, &root, startup, frame);
 
         let status = StaticText::builder(&panel)
             .with_label(startup.status)
@@ -1999,7 +2000,7 @@ pub mod wx {
         playback_controls: PlaybackControls,
     ) -> Result<String, String> {
         player.borrow_mut().stop();
-        update_now_playing(playback_controls, "Nothing playing", "");
+        update_now_playing(playback_controls, "", "");
         Ok("Playback stopped.".to_string())
     }
 
@@ -2042,6 +2043,10 @@ pub mod wx {
             &title
         });
         controls.status.set_label(status);
+        // Mirror the now-playing track into the window title bar, matching the
+        // Python app: "<track> - Station Scout", or just "Station Scout" when
+        // nothing is playing.
+        controls.frame.set_title(&playback_window_title(&title));
     }
 
     fn report_action(controls: MainControls, result: Result<String, String>) {
@@ -2679,6 +2684,7 @@ pub mod wx {
         parent: &Panel,
         root: &BoxSizer,
         startup: UiStartupState,
+        frame: Frame,
     ) -> (RadioControls, PodcastControls, PlaybackControls, Notebook) {
         let panel = Panel::builder(parent).build();
         panel.set_name("Station Scout workspace");
@@ -2716,7 +2722,7 @@ pub mod wx {
 
         // The now-playing transport is shared across both views so playback
         // context is never lost when switching between Radio and Podcasts.
-        let playback_controls = add_now_playing_controls(&panel, &column);
+        let playback_controls = add_now_playing_controls(&panel, &column, frame);
         panel.set_sizer(column, true);
         panel.show(startup.show_main_workspace);
         root.add(&panel, 1, SizerFlag::All | SizerFlag::Expand, 6);
@@ -3303,7 +3309,11 @@ pub mod wx {
         InboxPageControls { clear_inbox, inbox }
     }
 
-    fn add_now_playing_controls(parent: &Panel, root: &BoxSizer) -> PlaybackControls {
+    fn add_now_playing_controls(
+        parent: &Panel,
+        root: &BoxSizer,
+        frame: Frame,
+    ) -> PlaybackControls {
         let body = BoxSizer::builder(Orientation::Horizontal).build();
         let status_col = BoxSizer::builder(Orientation::Vertical).build();
         add_label(parent, &status_col, "Now Playing");
@@ -3364,6 +3374,7 @@ pub mod wx {
         body.add_sizer(&action_col, 2, SizerFlag::Expand, 0);
         root.add_sizer(&body, 0, SizerFlag::Expand, 0);
         PlaybackControls {
+            frame,
             title,
             status,
             stop,

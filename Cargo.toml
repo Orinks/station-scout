@@ -16,6 +16,7 @@ path = "rust/src/main.rs"
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
+getrandom = "0.3"
 md5 = "0.8"
 percent-encoding = "2.3"
 regex = "1.12"

@@ -6,6 +6,7 @@ All notable user-facing changes to Station Scout are tracked here.
 
 ### Added
 
+- Linux builds are back, now as an AppImage: download one file, mark it executable, and run it on Fedora, Ubuntu, Arch, or openSUSE. It bundles the image codecs the app needs while using your distro's own GTK, GStreamer, and screen reader stack, so Orca keeps working. You'll need your distro's GStreamer plugins installed for playback.
 - Rebuilt Station Scout as a Rust desktop app with native GStreamer playback for radio stations and podcasts.
 - Restored Last.fm and Spotify sign-in flows in the Rust app, including browser approval and saved account state.
 

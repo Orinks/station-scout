@@ -8,6 +8,8 @@ pub struct UiBlueprint {
     pub first_run_controls: &'static [&'static str],
     pub menu_titles: &'static [&'static str],
     pub menu_items: &'static [&'static str],
+    pub primary_view_tabs: &'static [&'static str],
+    pub view_shortcuts: &'static [&'static str],
     pub sections: &'static [&'static str],
     pub primary_actions: &'static [&'static str],
     pub list_names: &'static [&'static str],
@@ -58,10 +60,12 @@ pub fn station_scout_ui_blueprint() -> UiBlueprint {
             "First run - Import OPML",
             "First run - Search podcasts",
         ],
-        menu_titles: &["File", "Playback"],
+        menu_titles: &["File", "View", "Playback"],
         menu_items: &[
             "Settings",
             "Quit",
+            "Radio view",
+            "Podcasts view",
             "Focus search",
             "Play selected",
             "Play/Pause",
@@ -75,6 +79,8 @@ pub fn station_scout_ui_blueprint() -> UiBlueprint {
             "Start tracking",
             "Stop tracking",
         ],
+        primary_view_tabs: &["Radio", "Podcasts"],
+        view_shortcuts: &["Ctrl+1", "Ctrl+2"],
         sections: &[
             "Station",
             "Now Playing",
@@ -223,6 +229,35 @@ pub fn station_scout_ui_blueprint() -> UiBlueprint {
     }
 }
 
+/// Where a top-level view switch should land: which notebook page to select,
+/// which control to focus for keyboard and screen-reader users, and the status
+/// line to announce. Keeps the switch behavior in one tested place so the wx
+/// layer and the blueprint can never drift apart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ViewSwitch {
+    pub page_index: usize,
+    pub focus: &'static str,
+    pub status: &'static str,
+}
+
+/// Resolve a primary view name (see [`UiBlueprint::primary_view_tabs`]) to its
+/// switch target. Returns `None` for anything that is not a primary view.
+pub fn view_switch_for(view: &str) -> Option<ViewSwitch> {
+    match view {
+        "Radio" => Some(ViewSwitch {
+            page_index: 0,
+            focus: "Favorite stations",
+            status: "Showing Radio view.",
+        }),
+        "Podcasts" => Some(ViewSwitch {
+            page_index: 1,
+            focus: "Subscribed shows",
+            status: "Showing Podcasts view.",
+        }),
+        _ => None,
+    }
+}
+
 pub fn playback_window_title(now_playing: &str) -> String {
     let now_playing = now_playing.split_whitespace().collect::<Vec<_>>().join(" ");
     if now_playing.is_empty() {
@@ -235,8 +270,8 @@ pub fn playback_window_title(now_playing: &str) -> String {
 #[cfg(feature = "gui")]
 pub mod wx {
     use super::{
-        APP_TITLE, UiStartupState, startup_state_for_podcast_subscriptions,
-        station_scout_ui_blueprint,
+        APP_TITLE, UiStartupState, playback_window_title, startup_state_for_podcast_subscriptions,
+        station_scout_ui_blueprint, view_switch_for,
     };
     use crate::integrations_config::{lastfm_app_config, spotify_app_config};
     use crate::lastfm::{LastFmClient, LastFmProxyClient, lastfm_settings_view_state};
@@ -276,7 +311,11 @@ pub mod wx {
     const MENU_ID_ADD_TIMER: Id = 32_011;
     const MENU_ID_START_TRACKING: Id = 32_012;
     const MENU_ID_STOP_TRACKING: Id = 32_013;
+    const MENU_ID_VIEW_RADIO: Id = 32_014;
+    const MENU_ID_VIEW_PODCASTS: Id = 32_015;
     const VOLUME_STEP: f64 = 0.1;
+    const VIEW_PAGE_RADIO: usize = 0;
+    const VIEW_PAGE_PODCASTS: usize = 1;
 
     #[derive(Clone, Copy)]
     struct MainControls {
@@ -344,6 +383,7 @@ pub mod wx {
 
     #[derive(Clone, Copy)]
     struct PlaybackControls {
+        frame: Frame,
         title: StaticText,
         status: StaticText,
         stop: Button,
@@ -490,8 +530,8 @@ pub mod wx {
         let root = BoxSizer::builder(Orientation::Vertical).build();
 
         let first_run_controls = add_first_run_panel(&panel, &root, startup);
-        let (radio_controls, podcast_controls, playback_controls) =
-            add_main_workspace(&panel, &root, startup);
+        let (radio_controls, podcast_controls, playback_controls, views) =
+            add_main_workspace(&panel, &root, startup, frame);
 
         let status = StaticText::builder(&panel)
             .with_label(startup.status)
@@ -522,10 +562,12 @@ pub mod wx {
             controls,
             runtime.clone(),
             radio_controls,
+            podcast_controls,
             radio_state.clone(),
             player.clone(),
             playback_controls,
             spotify_callback_state.clone(),
+            views,
         );
         wire_first_run_events(
             controls,
@@ -533,6 +575,7 @@ pub mod wx {
             first_run_controls,
             podcast_controls,
             list_state.clone(),
+            views,
         );
         wire_radio_events(
             controls,
@@ -585,14 +628,17 @@ pub mod wx {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn wire_menu_events(
         controls: MainControls,
         runtime: SharedRuntime,
         radio_controls: RadioControls,
+        podcast_controls: PodcastControls,
         radio_state: SharedRadioListState,
         player: SharedPlayer,
         playback_controls: PlaybackControls,
         spotify_callback_state: SharedSpotifyCallbackState,
+        views: Notebook,
     ) {
         controls.frame.on_menu_selected(move |event| {
             let result = match event.get_id() {
@@ -602,7 +648,20 @@ pub mod wx {
                     radio_controls.integration_controls(),
                     spotify_callback_state.clone(),
                 ),
+                MENU_ID_VIEW_RADIO => Ok(show_view(
+                    views,
+                    VIEW_PAGE_RADIO,
+                    radio_controls,
+                    podcast_controls,
+                )),
+                MENU_ID_VIEW_PODCASTS => Ok(show_view(
+                    views,
+                    VIEW_PAGE_PODCASTS,
+                    radio_controls,
+                    podcast_controls,
+                )),
                 MENU_ID_FOCUS_SEARCH => {
+                    show_view(views, VIEW_PAGE_RADIO, radio_controls, podcast_controls);
                     radio_controls.name.set_focus();
                     Ok("Search focused.".to_string())
                 }
@@ -650,14 +709,37 @@ pub mod wx {
         });
     }
 
+    /// Switch the top-level view, move focus to a meaningful control on the
+    /// newly shown surface, and return a status line for screen readers.
+    fn show_view(
+        views: Notebook,
+        page: usize,
+        radio_controls: RadioControls,
+        podcast_controls: PodcastControls,
+    ) -> String {
+        views.set_selection(page);
+        let view = if page == VIEW_PAGE_PODCASTS {
+            podcast_controls.subscriptions.set_focus();
+            "Podcasts"
+        } else {
+            radio_controls.favorites.set_focus();
+            "Radio"
+        };
+        view_switch_for(view)
+            .map(|switch| switch.status.to_string())
+            .unwrap_or_default()
+    }
+
     fn wire_first_run_events(
         controls: MainControls,
         runtime: SharedRuntime,
         first_run_controls: FirstRunControls,
         podcast_controls: PodcastControls,
         list_state: SharedPodcastListState,
+        views: Notebook,
     ) {
         first_run_controls.subscribe.on_click(move |_| {
+            views.set_selection(VIEW_PAGE_PODCASTS);
             podcast_controls.feed_url.set_focus();
             set_status(
                 controls,
@@ -682,6 +764,7 @@ pub mod wx {
         }
 
         first_run_controls.search_podcasts.on_click(move |_| {
+            views.set_selection(VIEW_PAGE_PODCASTS);
             podcast_controls.query.set_focus();
             set_status(
                 controls,
@@ -1917,7 +2000,7 @@ pub mod wx {
         playback_controls: PlaybackControls,
     ) -> Result<String, String> {
         player.borrow_mut().stop();
-        update_now_playing(playback_controls, "Nothing playing", "");
+        update_now_playing(playback_controls, "", "");
         Ok("Playback stopped.".to_string())
     }
 
@@ -1960,6 +2043,10 @@ pub mod wx {
             &title
         });
         controls.status.set_label(status);
+        // Mirror the now-playing track into the window title bar, matching the
+        // Python app: "<track> - Station Scout", or just "Station Scout" when
+        // nothing is playing.
+        controls.frame.set_title(&playback_window_title(&title));
     }
 
     fn report_action(controls: MainControls, result: Result<String, String>) {
@@ -2498,6 +2585,14 @@ pub mod wx {
             .append_separator()
             .append_item(ID_EXIT, "&Quit\tAlt+F4", "Quit")
             .build();
+        let view_menu = Menu::builder()
+            .append_item(MENU_ID_VIEW_RADIO, "&Radio view\tCtrl+1", "Radio view")
+            .append_item(
+                MENU_ID_VIEW_PODCASTS,
+                "&Podcasts view\tCtrl+2",
+                "Podcasts view",
+            )
+            .build();
         let playback_menu = Menu::builder()
             .append_item(MENU_ID_FOCUS_SEARCH, "Focus search\tCtrl+F", "Focus search")
             .append_item(
@@ -2540,6 +2635,7 @@ pub mod wx {
             .build();
         let menu_bar = MenuBar::builder()
             .append(file_menu, "&File")
+            .append(view_menu, "&View")
             .append(playback_menu, "&Playback")
             .build();
         frame.set_menu_bar(menu_bar);
@@ -2588,21 +2684,45 @@ pub mod wx {
         parent: &Panel,
         root: &BoxSizer,
         startup: UiStartupState,
-    ) -> (RadioControls, PodcastControls, PlaybackControls) {
+        frame: Frame,
+    ) -> (RadioControls, PodcastControls, PlaybackControls, Notebook) {
         let panel = Panel::builder(parent).build();
         panel.set_name("Station Scout workspace");
         let column = BoxSizer::builder(Orientation::Vertical).build();
-        add_station_picker(&panel, &column);
-        let station_search = add_station_search(&panel, &column);
-        let station_browse = add_station_browse(&panel, &column);
-        let station_actions = add_station_actions(&panel, &column);
-        let search_controls = add_podcast_search(&panel, &column);
-        add_podcast_settings(&panel, &column);
-        let integration_controls = add_lastfm_settings(&panel, &column);
-        let station_results = add_station_results(&panel, &column);
-        let saved_lists = add_radio_saved_lists(&panel, &column);
-        let notebook_controls = add_podcast_notebook(&panel, &column);
-        let playback_controls = add_now_playing_controls(&panel, &column);
+
+        // Top-level Radio vs Podcasts view switcher. The notebook tabs are
+        // keyboard reachable, and the View menu (Ctrl+1 / Ctrl+2) lets users
+        // jump between the two surfaces from anywhere in the app.
+        let views = Notebook::builder(&panel).build();
+        describe_control(&views, "Station Scout views");
+
+        let radio_page = Panel::builder(&views).build();
+        radio_page.set_name("Radio view");
+        let radio_column = BoxSizer::builder(Orientation::Vertical).build();
+        add_station_picker(&radio_page, &radio_column);
+        let station_search = add_station_search(&radio_page, &radio_column);
+        let station_browse = add_station_browse(&radio_page, &radio_column);
+        let station_actions = add_station_actions(&radio_page, &radio_column);
+        let station_results = add_station_results(&radio_page, &radio_column);
+        let saved_lists = add_radio_saved_lists(&radio_page, &radio_column);
+        let integration_controls = add_lastfm_settings(&radio_page, &radio_column);
+        radio_page.set_sizer(radio_column, true);
+        views.add_page(&radio_page, "Radio", true, None);
+
+        let podcast_page = Panel::builder(&views).build();
+        podcast_page.set_name("Podcasts view");
+        let podcast_column = BoxSizer::builder(Orientation::Vertical).build();
+        let search_controls = add_podcast_search(&podcast_page, &podcast_column);
+        add_podcast_settings(&podcast_page, &podcast_column);
+        let notebook_controls = add_podcast_notebook(&podcast_page, &podcast_column);
+        podcast_page.set_sizer(podcast_column, true);
+        views.add_page(&podcast_page, "Podcasts", false, None);
+
+        column.add(&views, 1, SizerFlag::All | SizerFlag::Expand, 4);
+
+        // The now-playing transport is shared across both views so playback
+        // context is never lost when switching between Radio and Podcasts.
+        let playback_controls = add_now_playing_controls(&panel, &column, frame);
         panel.set_sizer(column, true);
         panel.show(startup.show_main_workspace);
         root.add(&panel, 1, SizerFlag::All | SizerFlag::Expand, 6);
@@ -2655,6 +2775,7 @@ pub mod wx {
                 inbox: notebook_controls.inbox,
             },
             playback_controls,
+            views,
         )
     }
 
@@ -3188,7 +3309,11 @@ pub mod wx {
         InboxPageControls { clear_inbox, inbox }
     }
 
-    fn add_now_playing_controls(parent: &Panel, root: &BoxSizer) -> PlaybackControls {
+    fn add_now_playing_controls(
+        parent: &Panel,
+        root: &BoxSizer,
+        frame: Frame,
+    ) -> PlaybackControls {
         let body = BoxSizer::builder(Orientation::Horizontal).build();
         let status_col = BoxSizer::builder(Orientation::Vertical).build();
         add_label(parent, &status_col, "Now Playing");
@@ -3249,6 +3374,7 @@ pub mod wx {
         body.add_sizer(&action_col, 2, SizerFlag::Expand, 0);
         root.add_sizer(&body, 0, SizerFlag::Expand, 0);
         PlaybackControls {
+            frame,
             title,
             status,
             stop,

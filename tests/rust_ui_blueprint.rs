@@ -1,6 +1,6 @@
 use station_scout::ui::{
     APP_TITLE, UiStartupState, playback_window_title, startup_state_for_podcast_subscriptions,
-    station_scout_ui_blueprint,
+    station_scout_ui_blueprint, view_switch_for,
 };
 
 #[test]
@@ -30,12 +30,14 @@ fn ui_blueprint_preserves_station_scout_surfaces_and_accessible_initial_focus() 
 fn ui_blueprint_matches_reference_python_menubar() {
     let blueprint = station_scout_ui_blueprint();
 
-    assert_eq!(blueprint.menu_titles, &["File", "Playback"]);
+    assert_eq!(blueprint.menu_titles, &["File", "View", "Playback"]);
     assert_eq!(
         blueprint.menu_items,
         &[
             "Settings",
             "Quit",
+            "Radio view",
+            "Podcasts view",
             "Focus search",
             "Play selected",
             "Play/Pause",
@@ -50,6 +52,49 @@ fn ui_blueprint_matches_reference_python_menubar() {
             "Stop tracking",
         ]
     );
+}
+
+#[test]
+fn view_switch_targets_match_primary_tabs_and_focus_a_meaningful_control() {
+    let blueprint = station_scout_ui_blueprint();
+
+    let radio = view_switch_for("Radio").expect("Radio is a primary view");
+    assert_eq!(radio.page_index, 0);
+    assert_eq!(radio.focus, "Favorite stations");
+    assert_eq!(radio.status, "Showing Radio view.");
+
+    let podcasts = view_switch_for("Podcasts").expect("Podcasts is a primary view");
+    assert_eq!(podcasts.page_index, 1);
+    assert_eq!(podcasts.focus, "Subscribed shows");
+    assert_eq!(podcasts.status, "Showing Podcasts view.");
+
+    // Page indices line up with the order the tabs are presented in.
+    assert_eq!(blueprint.primary_view_tabs[radio.page_index], "Radio");
+    assert_eq!(blueprint.primary_view_tabs[podcasts.page_index], "Podcasts");
+
+    // Unknown views have no switch target.
+    assert!(view_switch_for("Settings").is_none());
+}
+
+#[test]
+fn ui_blueprint_splits_radio_and_podcast_into_switchable_views() {
+    let blueprint = station_scout_ui_blueprint();
+
+    // Radio and podcast surfaces live on two top-level views the user can
+    // switch between at any time, rather than one long stacked workspace.
+    assert_eq!(blueprint.primary_view_tabs, &["Radio", "Podcasts"]);
+
+    // The view switch is reachable by keyboard from anywhere in the app.
+    assert_eq!(blueprint.view_shortcuts, &["Ctrl+1", "Ctrl+2"]);
+
+    // The switch is also discoverable for screen-reader users via the menu bar.
+    assert!(blueprint.menu_titles.contains(&"View"));
+    assert!(blueprint.menu_items.contains(&"Radio view"));
+    assert!(blueprint.menu_items.contains(&"Podcasts view"));
+
+    // The shared now-playing surface stays available regardless of which view
+    // is active, so playback context is never lost when switching.
+    assert!(blueprint.sections.contains(&"Now Playing"));
 }
 
 #[test]

@@ -52,3 +52,21 @@ cargo build --release --features gui
 New-Item -ItemType Directory -Force dist/windows
 Copy-Item target/release/station-scout.exe dist/windows/StationScout.exe
 ```
+
+### Linux AppImage
+
+On Linux, `installer/build_appimage.py` packages the release binary as a cross-distro
+AppImage. It bundles the Ubuntu-soname shared libraries the wxDragon build links against
+(libjpeg.so.8, libtiff.so.6, and friends do not exist on Fedora/Arch/openSUSE) while
+leaving GTK, GLib, D-Bus, GStreamer, and OpenSSL to the target system so screen readers
+(AT-SPI/Orca), themes, playback plugins, and TLS security updates keep coming from the
+host distro. Playback requires the distro's GStreamer runtime and plugins.
+
+```bash
+cargo build --release --features gui
+mkdir -p dist/StationScout
+cp target/release/station-scout dist/StationScout/StationScout
+python3 installer/build_appimage.py
+```
+
+CI smoke tests the resulting AppImage in a Fedora container before it is uploaded.

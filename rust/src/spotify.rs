@@ -260,14 +260,11 @@ pub fn build_spotify_auth_request(
     redirect_uri: &str,
     scopes: &[&str],
 ) -> SpotifyAuthRequest {
-    let entropy = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    let state = URL_SAFE_NO_PAD.encode(Sha256::digest(format!("state-{entropy}").as_bytes()));
-    let code_verifier = URL_SAFE_NO_PAD.encode(Sha256::digest(
-        format!("verifier-{entropy}-{client_id}").as_bytes(),
-    ));
+    // PKCE and the CSRF `state` only protect the flow if these values are
+    // unpredictable, so draw them from the OS CSPRNG. Byte counts mirror the
+    // reference Python app (secrets.token_urlsafe(24) / token_urlsafe(64)).
+    let state = random_token(24);
+    let code_verifier = random_token(64);
     let code_challenge = code_challenge(&code_verifier);
     let query = Serializer::new(String::new())
         .append_pair("client_id", client_id)
@@ -300,8 +297,18 @@ pub fn spotify_playlist_tracks(entries: &[TrackEntry]) -> Vec<(String, String)> 
     tracks
 }
 
-fn code_challenge(code_verifier: &str) -> String {
+pub fn code_challenge(code_verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()))
+}
+
+/// Generate a URL-safe random token from `num_bytes` of OS entropy. The
+/// base64url-no-pad alphabet (`A-Za-z0-9-_`) is a subset of the PKCE
+/// unreserved character set, so the result is safe to use directly as a
+/// `code_verifier` or CSRF `state`.
+fn random_token(num_bytes: usize) -> String {
+    let mut bytes = vec![0_u8; num_bytes];
+    getrandom::fill(&mut bytes).expect("operating system CSPRNG must be available");
+    URL_SAFE_NO_PAD.encode(&bytes)
 }
 
 impl SpotifyError {

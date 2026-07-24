@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Station Scout
+Comment=Accessible desktop internet radio and podcast explorer
+Exec=StationScout
+Icon=station-scout
+Categories=AudioVideo;Audio;Player;Network;
+Terminal=false

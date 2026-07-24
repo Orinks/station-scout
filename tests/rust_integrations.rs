@@ -9,7 +9,8 @@ use station_scout::lastfm::{
 };
 use station_scout::models::Station;
 use station_scout::spotify::{
-    DEFAULT_SCOPES, SpotifyClient, build_spotify_auth_request, spotify_playlist_tracks,
+    DEFAULT_SCOPES, SpotifyClient, build_spotify_auth_request, code_challenge,
+    spotify_playlist_tracks,
 };
 use station_scout::storage::AppState;
 use station_scout::tracklog::TrackEntry;
@@ -42,6 +43,45 @@ fn spotify_auth_request_uses_pkce_and_playlist_scopes() {
     assert!(request.url.contains("playlist-modify-private"));
     assert!(!request.state.is_empty());
     assert!(!request.code_verifier.is_empty());
+}
+
+#[test]
+fn spotify_auth_request_uses_unpredictable_high_entropy_pkce_values() {
+    let redirect = "http://127.0.0.1/spotify/callback";
+    let first = build_spotify_auth_request("client", redirect, DEFAULT_SCOPES);
+    let second = build_spotify_auth_request("client", redirect, DEFAULT_SCOPES);
+
+    // A CSPRNG-backed flow must not produce the same secret twice for
+    // identical inputs. The previous implementation derived these from the
+    // wall-clock timestamp and the (public) client id, which is predictable.
+    assert_ne!(first.code_verifier, second.code_verifier);
+    assert_ne!(first.state, second.state);
+
+    // PKCE (RFC 7636): the verifier must be 43..=128 unreserved characters and
+    // should carry real entropy. A bare 32-byte hash base64url-encodes to only
+    // 43 chars; we require meaningfully more so the value reflects OS entropy.
+    assert!(
+        first.code_verifier.len() >= 64,
+        "code_verifier too short for real entropy: {}",
+        first.code_verifier.len()
+    );
+    assert!(first.code_verifier.len() <= 128);
+    assert!(
+        first
+            .code_verifier
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+        "code_verifier must use the unreserved PKCE charset"
+    );
+
+    // The challenge embedded in the URL is the S256 transform of the verifier
+    // that was handed back, so the two stay bound together.
+    let expected_challenge = code_challenge(&first.code_verifier);
+    assert!(
+        first
+            .url
+            .contains(&format!("code_challenge={expected_challenge}"))
+    );
 }
 
 #[test]

@@ -23,7 +23,18 @@ if (-not (Test-Path (Join-Path $gstBin "gstreamer-1.0-0.dll")) -or
     $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$Version/msvc/gstreamer-1.0-msvc-x86_64-$Version.exe"
 
     if (-not (Test-Path $installer)) {
-        Invoke-WebRequest -Uri $url -OutFile $installer
+        # The GStreamer mirror sometimes drops large downloads; retry a few times.
+        for ($attempt = 1; $attempt -le 4; $attempt++) {
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $installer
+                break
+            } catch {
+                Remove-Item $installer -ErrorAction SilentlyContinue
+                if ($attempt -eq 4) { throw }
+                Write-Host "GStreamer download failed (attempt $attempt): $($_.Exception.Message). Retrying."
+                Start-Sleep -Seconds (5 * $attempt)
+            }
+        }
     }
 
     $actualSha256 = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()

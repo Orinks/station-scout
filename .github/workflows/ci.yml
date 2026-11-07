@@ -51,6 +51,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 
+      - name: Cache GStreamer (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/gstreamer
+          key: gstreamer-msvc-x86_64-1.28.3
+
       - name: Install GStreamer (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

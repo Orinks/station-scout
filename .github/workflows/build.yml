@@ -112,6 +112,12 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
+      - name: Cache GStreamer
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/gstreamer
+          key: gstreamer-msvc-x86_64-1.28.3
+
       - name: Install GStreamer
         run: ./scripts/install-gstreamer-windows.ps1 -InstallDir "$env:RUNNER_TEMP\gstreamer"
 

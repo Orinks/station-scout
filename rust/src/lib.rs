@@ -1,5 +1,6 @@
 pub mod cast;
 pub mod direct_streams;
+pub mod gst_runtime;
 pub mod integrations_config;
 pub mod lastfm;
 pub mod models;

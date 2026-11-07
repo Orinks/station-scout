@@ -3309,11 +3309,7 @@ pub mod wx {
         InboxPageControls { clear_inbox, inbox }
     }
 
-    fn add_now_playing_controls(
-        parent: &Panel,
-        root: &BoxSizer,
-        frame: Frame,
-    ) -> PlaybackControls {
+    fn add_now_playing_controls(parent: &Panel, root: &BoxSizer, frame: Frame) -> PlaybackControls {
         let body = BoxSizer::builder(Orientation::Horizontal).build();
         let status_col = BoxSizer::builder(Orientation::Vertical).build();
         add_label(parent, &status_col, "Now Playing");

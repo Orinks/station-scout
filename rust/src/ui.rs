@@ -186,6 +186,7 @@ pub fn station_scout_ui_blueprint() -> UiBlueprint {
             ("Country", "Country"),
             ("Language", "Language"),
             ("Tag", "Tag"),
+            ("Max results", "Maximum station results"),
             ("Browse by", "Browse category"),
             ("Choice", "Browse choices"),
             ("Station results", "Station search results"),
@@ -280,7 +281,10 @@ pub mod wx {
     use crate::player::{RadioPlayer, play_podcast_episode_stream, play_station_stream};
     use crate::podcasts::discovery::PodcastSearchClient;
     use crate::podcasts::repository::EpisodeRow;
-    use crate::radio_browser::RadioBrowserClient;
+    use crate::radio_browser::{
+        DEFAULT_STATION_RESULT_LIMIT_INDEX, RadioBrowserClient, STATION_RESULT_LIMITS,
+        filter_choice_label, filter_dropdown_choices, resolve_filter_value,
+    };
     use crate::runtime::StationScoutRuntime;
     use crate::spotify::{DEFAULT_SCOPES, SpotifyClient, build_spotify_auth_request};
     use crate::storage::system_credential_store;
@@ -356,9 +360,10 @@ pub mod wx {
     #[derive(Clone, Copy)]
     struct RadioControls {
         name: TextCtrl,
-        country: TextCtrl,
-        language: TextCtrl,
+        country: ComboBox,
+        language: ComboBox,
         tag: TextCtrl,
+        result_limit: Choice,
         search: Button,
         browse_kind: Choice,
         load_browse: Button,
@@ -464,6 +469,8 @@ pub mod wx {
     struct RadioListState {
         station_results: Vec<Station>,
         browse_facets: Vec<BrowseFacet>,
+        country_choices: Vec<BrowseFacet>,
+        language_choices: Vec<BrowseFacet>,
         favorite_stations: Vec<Station>,
         recent_stations: Vec<Station>,
         active_source: RadioSelectionSource,
@@ -602,6 +609,7 @@ pub mod wx {
             radio_controls.integration_controls(),
             spotify_callback_state,
         );
+        install_filter_choice_loader(controls, radio_controls, radio_state.clone());
         if let Some(error) = startup_error {
             set_status(controls, &format!("Runtime unavailable: {error}"));
         } else if let Err(error) = refresh_radio_lists(runtime.clone(), radio_controls, radio_state)
@@ -1536,6 +1544,13 @@ pub mod wx {
         controls: RadioControls,
         radio_state: SharedRadioListState,
     ) -> Result<String, String> {
+        let (country, language) = {
+            let state = radio_state.borrow();
+            (
+                resolve_filter_value(&controls.country.get_value(), &state.country_choices),
+                resolve_filter_value(&controls.language.get_value(), &state.language_choices),
+            )
+        };
         let stations = {
             let borrowed = runtime.borrow();
             let runtime = borrowed
@@ -1545,10 +1560,10 @@ pub mod wx {
                 .search_radio_with_client(
                     &RadioBrowserClient::default(),
                     &controls.name.get_value(),
-                    &controls.country.get_value(),
-                    &controls.language.get_value(),
+                    &country,
+                    &language,
                     &controls.tag.get_value(),
-                    50,
+                    selected_result_limit(controls),
                 )
                 .map_err(|error| error.to_string())?
         };
@@ -1611,12 +1626,73 @@ pub mod wx {
                 .as_ref()
                 .ok_or_else(|| "Runtime unavailable.".to_string())?;
             runtime
-                .browse_radio_stations_with_client(&RadioBrowserClient::default(), &facet, 50)
+                .browse_radio_stations_with_client(
+                    &RadioBrowserClient::default(),
+                    &facet,
+                    selected_result_limit(controls),
+                )
                 .map_err(|error| error.to_string())?
         };
         fill_station_results(controls.station_results, &stations);
         radio_state.borrow_mut().station_results = stations;
         Ok(format!("Loaded stations for {}.", facet.name))
+    }
+
+    fn selected_result_limit(controls: RadioControls) -> i32 {
+        controls
+            .result_limit
+            .get_selection()
+            .and_then(|index| STATION_RESULT_LIMITS.get(index as usize))
+            .copied()
+            .unwrap_or(STATION_RESULT_LIMITS[DEFAULT_STATION_RESULT_LIMIT_INDEX])
+    }
+
+    type FilterChoices = (Vec<BrowseFacet>, Vec<BrowseFacet>);
+
+    /// Loads the country and language dropdowns in the background so the
+    /// window opens without waiting on Radio Browser.
+    fn install_filter_choice_loader(
+        controls: MainControls,
+        radio_controls: RadioControls,
+        radio_state: SharedRadioListState,
+    ) {
+        let (sender, receiver) = mpsc::channel::<FilterChoices>();
+        thread::spawn(move || {
+            let client = RadioBrowserClient::default();
+            let fetch = |kind| {
+                client
+                    .browse_facets(kind, 500)
+                    .map(filter_dropdown_choices)
+                    .unwrap_or_default()
+            };
+            let _ = sender.send((
+                fetch(BrowseFacetKind::Location),
+                fetch(BrowseFacetKind::Language),
+            ));
+        });
+        let timer: &'static Timer<Frame> = Box::leak(Box::new(Timer::new(&controls.frame)));
+        timer.on_tick(move |_| match receiver.try_recv() {
+            Ok((countries, languages)) => {
+                timer.stop();
+                fill_filter_dropdown(radio_controls.country, &countries);
+                fill_filter_dropdown(radio_controls.language, &languages);
+                let mut state = radio_state.borrow_mut();
+                state.country_choices = countries;
+                state.language_choices = languages;
+            }
+            Err(TryRecvError::Disconnected) => timer.stop(),
+            Err(TryRecvError::Empty) => {}
+        });
+        timer.start(250, false);
+    }
+
+    fn fill_filter_dropdown(combo: ComboBox, choices: &[BrowseFacet]) {
+        let typed = combo.get_value();
+        combo.clear();
+        for facet in choices {
+            combo.append(&filter_choice_label(facet));
+        }
+        combo.set_value(&typed);
     }
 
     fn selected_browse_kind(controls: RadioControls) -> BrowseFacetKind {
@@ -2732,6 +2808,7 @@ pub mod wx {
                 country: station_search.country,
                 language: station_search.language,
                 tag: station_search.tag,
+                result_limit: station_search.result_limit,
                 search: station_search.search,
                 browse_kind: station_browse.kind,
                 load_browse: station_browse.load,
@@ -2793,9 +2870,10 @@ pub mod wx {
     #[derive(Clone, Copy)]
     struct StationSearchControls {
         name: TextCtrl,
-        country: TextCtrl,
-        language: TextCtrl,
+        country: ComboBox,
+        language: ComboBox,
         tag: TextCtrl,
+        result_limit: Choice,
         search: Button,
     }
 
@@ -2806,17 +2884,31 @@ pub mod wx {
         describe_control(&name, "Station name or call letters");
         row.add(&name, 1, SizerFlag::All | SizerFlag::Expand, 4);
         add_label(parent, &row, "Country");
-        let country = TextCtrl::builder(parent).build();
+        // Editable dropdowns: pick from the list loaded from Radio Browser,
+        // or type any value.
+        let country = ComboBox::builder(parent).build();
         describe_control(&country, "Country");
         row.add(&country, 1, SizerFlag::All | SizerFlag::Expand, 4);
         add_label(parent, &row, "Language");
-        let language = TextCtrl::builder(parent).build();
+        let language = ComboBox::builder(parent).build();
         describe_control(&language, "Language");
         row.add(&language, 1, SizerFlag::All | SizerFlag::Expand, 4);
         add_label(parent, &row, "Tag");
         let tag = TextCtrl::builder(parent).build();
         describe_control(&tag, "Tag");
         row.add(&tag, 1, SizerFlag::All | SizerFlag::Expand, 4);
+        add_label(parent, &row, "Max results");
+        let result_limit = Choice::builder(parent)
+            .with_choices(
+                STATION_RESULT_LIMITS
+                    .iter()
+                    .map(|limit| limit.to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .build();
+        result_limit.set_selection(DEFAULT_STATION_RESULT_LIMIT_INDEX as u32);
+        describe_control(&result_limit, "Maximum station results");
+        row.add(&result_limit, 0, SizerFlag::All | SizerFlag::Expand, 4);
         let search = add_button(parent, &row, "Search");
         root.add_sizer(&row, 0, SizerFlag::Expand, 0);
         StationSearchControls {
@@ -2824,6 +2916,7 @@ pub mod wx {
             country,
             language,
             tag,
+            result_limit,
             search,
         }
     }

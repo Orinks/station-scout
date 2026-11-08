@@ -18,7 +18,7 @@ All notable user-facing changes to Station Scout are tracked here.
 
 ### Fixed
 
-- Fixed the Windows build failing to start with "gstreamer-1.0-0.dll was not found" and similar errors. The installer and portable zip now include the GStreamer playback libraries, so you no longer need to install GStreamer separately. Run `StationScout.exe --check-gstreamer` to confirm playback support on your PC.
+- Fixed the Windows build failing to start with "gstreamer-1.0-0.dll was not found" and similar errors. The installer and portable zip now include the GStreamer libraries and audio plugins needed for playback, so you no longer need to install GStreamer separately. Video podcast episodes play their audio track only. Run `StationScout.exe --check-gstreamer` to confirm playback support on your PC.
 - Improved Spotify playlist export after tracking sessions so stale credentials refresh automatically when possible and clearly ask the listener to reconnect Spotify when authorization has expired.
 
 ## [1.0.0] - 2026-05-10

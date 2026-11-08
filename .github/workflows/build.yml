@@ -109,14 +109,25 @@ jobs:
             choco install innosetup -y --no-progress
           }
 
-      - name: Cache GStreamer
-        uses: actions/cache@v5
+      # Restore and save GStreamer as separate steps so a successful install
+      # is cached right away, even if a later step fails or the job times out.
+      # The freedesktop.org mirror can take over 30 minutes from CI.
+      - name: Restore GStreamer cache
+        id: gst-cache
+        uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}/gstreamer
           key: gstreamer-msvc-x86_64-1.28.3
 
       - name: Install GStreamer
         run: ./scripts/install-gstreamer-windows.ps1 -InstallDir "$env:RUNNER_TEMP\gstreamer"
+
+      - name: Save GStreamer cache
+        if: steps.gst-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/gstreamer
+          key: gstreamer-msvc-x86_64-1.28.3
 
       - name: Build
         run: |

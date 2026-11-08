@@ -27,13 +27,15 @@ if (-not (Test-Path (Join-Path $gstBin "gstreamer-1.0-0.dll")) -or
         # resumes partial downloads and gives up on a stalled connection
         # instead of hanging until the job times out.
         $partial = "$installer.part"
-        for ($attempt = 1; $attempt -le 5; $attempt++) {
+        # Each attempt resumes where the last stopped, so allow plenty of them.
+        $maxAttempts = 20
+        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
             & curl.exe -L --fail --silent --show-error --connect-timeout 30 `
                 --speed-limit 20000 --speed-time 60 -C - -o $partial $url
             if ($LASTEXITCODE -eq 0) { break }
-            if ($attempt -eq 5) { throw "GStreamer download failed after $attempt attempts (curl exit $LASTEXITCODE)." }
+            if ($attempt -eq $maxAttempts) { throw "GStreamer download failed after $attempt attempts (curl exit $LASTEXITCODE)." }
             Write-Host "GStreamer download attempt $attempt failed (curl exit $LASTEXITCODE). Retrying."
-            Start-Sleep -Seconds (5 * $attempt)
+            Start-Sleep -Seconds ([Math]::Min(5 * $attempt, 30))
         }
         Move-Item $partial $installer -Force
     }

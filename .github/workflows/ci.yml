@@ -22,7 +22,8 @@ jobs:
   validate:
     name: Validate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # Windows can need extra time on a cold GStreamer cache (slow mirror).
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

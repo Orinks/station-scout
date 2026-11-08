@@ -1,8 +1,9 @@
 use station_scout::direct_streams::{station_from_direct_url, streamurl_search_url};
 use station_scout::models::{BrowseFacet, BrowseFacetKind, Station, TuneTimer};
 use station_scout::radio_browser::{
-    BrowseEndpoint, RadioBrowserClient, browse_facet_request, clean_browse_facet, discovery_sorted,
-    search_request,
+    BrowseEndpoint, DEFAULT_STATION_RESULT_LIMIT_INDEX, MAX_STATION_RESULTS, RadioBrowserClient,
+    STATION_RESULT_LIMITS, browse_facet_request, clean_browse_facet, discovery_sorted,
+    filter_choice_label, filter_dropdown_choices, resolve_filter_value, search_request,
 };
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -181,13 +182,69 @@ fn search_request_sends_filters_and_hides_broken_stations() {
 
 #[test]
 fn search_request_treats_non_code_country_as_country_name() {
-    let request = search_request("", "United States", "", "", 500);
+    let request = search_request("", "United States", "", "", 250);
 
     assert_eq!(
         request.params.get("country").map(String::as_str),
         Some("United States")
     );
-    assert_eq!(request.params.get("limit").map(String::as_str), Some("100"));
+    assert_eq!(request.params.get("limit").map(String::as_str), Some("250"));
+}
+
+#[test]
+fn search_request_caps_limit_at_max_station_results() {
+    let request = search_request("", "", "", "", 5000);
+
+    assert_eq!(request.params.get("limit").map(String::as_str), Some("500"));
+    assert_eq!(STATION_RESULT_LIMITS.last(), Some(&MAX_STATION_RESULTS));
+    assert_eq!(
+        STATION_RESULT_LIMITS[DEFAULT_STATION_RESULT_LIMIT_INDEX],
+        100
+    );
+}
+
+fn facet(kind: BrowseFacetKind, name: &str, count: i32, code: &str) -> BrowseFacet {
+    BrowseFacet {
+        kind,
+        name: name.to_string(),
+        station_count: count,
+        code: code.to_string(),
+    }
+}
+
+#[test]
+fn filter_dropdown_choices_sorts_by_name_and_drops_duplicates() {
+    let choices = filter_dropdown_choices(vec![
+        facet(BrowseFacetKind::Location, "Germany", 3000, "de"),
+        facet(BrowseFacetKind::Location, "austria", 400, "AT"),
+        facet(BrowseFacetKind::Location, "Germany", 5, ""),
+        facet(BrowseFacetKind::Location, "#", 1, ""),
+    ]);
+
+    let names: Vec<_> = choices.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["austria", "Germany"]);
+    assert_eq!(choices[1].code, "DE");
+}
+
+#[test]
+fn resolve_filter_value_maps_country_names_to_codes() {
+    let countries = vec![facet(BrowseFacetKind::Location, "Germany", 3000, "DE")];
+
+    assert_eq!(resolve_filter_value("germany", &countries), "DE");
+    assert_eq!(resolve_filter_value(" Czechia ", &countries), "Czechia");
+    assert_eq!(resolve_filter_value("", &countries), "");
+}
+
+#[test]
+fn language_choices_display_capitalized_but_search_original_name() {
+    let languages = vec![facet(BrowseFacetKind::Language, "czech", 300, "cs")];
+
+    assert_eq!(filter_choice_label(&languages[0]), "Czech");
+    assert_eq!(resolve_filter_value("Czech", &languages), "czech");
+    assert_eq!(
+        filter_choice_label(&facet(BrowseFacetKind::Location, "Czechia", 1, "CZ")),
+        "Czechia"
+    );
 }
 
 #[test]

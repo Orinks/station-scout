@@ -12,10 +12,13 @@ All notable user-facing changes to Station Scout are tracked here.
 
 ### Improved
 
+- Radio search can now return up to 500 stations. Pick 50, 100, 250, or 500 from the new Max results list next to Search; it also applies to browsing by genre, location, or language. The default is now 100.
+- Country and Language in radio search are now drop-down lists filled from Radio Browser, so you can pick a value instead of guessing the spelling. You can still type a value, and a country name you pick is searched by its country code for exact matches.
 - Split the main window into separate Radio and Podcasts views so each surface stands on its own instead of one long stacked list. Switch between them any time from the tabs, the new View menu, or with Ctrl+1 and Ctrl+2 - and whatever you're playing keeps going in the shared Now Playing strip below.
 
 ### Fixed
 
+- Fixed the Windows build failing to start with "gstreamer-1.0-0.dll was not found" and similar errors. The installer and portable zip now include the GStreamer playback libraries, so you no longer need to install GStreamer separately. Run `StationScout.exe --check-gstreamer` to confirm playback support on your PC.
 - Improved Spotify playlist export after tracking sessions so stale credentials refresh automatically when possible and clearly ask the listener to reconnect Spotify when authorization has expired.
 
 ## [1.0.0] - 2026-05-10

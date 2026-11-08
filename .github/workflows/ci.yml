@@ -51,6 +51,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 
+      - name: Cache GStreamer (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/gstreamer
+          key: gstreamer-msvc-x86_64-1.28.3
+
       - name: Install GStreamer (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -93,3 +100,22 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: cargo check --bin station-scout --features gui
+
+      - name: Check bundled GStreamer runs without a system install
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --bin station-scout
+          $dest = Join-Path $env:RUNNER_TEMP "bundle-check"
+          New-Item -ItemType Directory -Force $dest | Out-Null
+          Copy-Item target/debug/station-scout.exe (Join-Path $dest "StationScout.exe")
+          ./scripts/bundle-gstreamer-windows.ps1 -GstRoot "$env:RUNNER_TEMP\gstreamer" -Dest $dest
+          # Run without the build machine's GStreamer on PATH, like a user's PC.
+          $gstBin = Join-Path $env:RUNNER_TEMP "gstreamer\bin"
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -and ($_.TrimEnd('\') -ne $gstBin.TrimEnd('\')) }) -join ';'
+          Remove-Item Env:GSTREAMER_1_0_ROOT_MSVC_X86_64, Env:GSTREAMER_ROOT_X86_64, Env:PKG_CONFIG_PATH -ErrorAction SilentlyContinue
+          $env:GST_REGISTRY = Join-Path $env:RUNNER_TEMP "ci-registry.bin"
+          & (Join-Path $dest "StationScout.exe") --check-gstreamer
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundled GStreamer check failed with exit code $LASTEXITCODE (0xC0000135 = missing DLL)."
+          }

@@ -181,6 +181,59 @@ pub enum BrowseEndpoint {
     Language,
 }
 
+/// Choices for how many stations a search or browse returns.
+pub const STATION_RESULT_LIMITS: &[i32] = &[50, 100, 250, 500];
+/// Index into [`STATION_RESULT_LIMITS`] selected by default.
+pub const DEFAULT_STATION_RESULT_LIMIT_INDEX: usize = 1;
+/// Largest station result count we ask Radio Browser for.
+pub const MAX_STATION_RESULTS: i32 = 500;
+
+/// Sorts country or language facets by name for a dropdown, dropping
+/// duplicate names (Radio Browser lists some names more than once).
+pub fn filter_dropdown_choices(facets: Vec<BrowseFacet>) -> Vec<BrowseFacet> {
+    let mut facets: Vec<BrowseFacet> = facets.into_iter().filter_map(clean_browse_facet).collect();
+    facets.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then(b.station_count.cmp(&a.station_count))
+    });
+    facets.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
+    facets
+}
+
+/// Dropdown text for a facet. Radio Browser stores language names in
+/// lowercase, so those are capitalized for display.
+pub fn filter_choice_label(facet: &BrowseFacet) -> String {
+    if facet.kind != BrowseFacetKind::Language {
+        return facet.name.clone();
+    }
+    facet
+        .name
+        .split(' ')
+        .map(|word| {
+            let mut chars = word.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Turns what the user picked or typed into a search value. A name from the
+/// dropdown maps to its query value (a country code for countries); any
+/// other text is passed through as typed.
+pub fn resolve_filter_value(entered: &str, choices: &[BrowseFacet]) -> String {
+    let entered = entered.trim();
+    choices
+        .iter()
+        .find(|facet| facet.name.eq_ignore_ascii_case(entered))
+        .map(|facet| facet.query_value().to_string())
+        .unwrap_or_else(|| entered.to_string())
+}
+
 pub fn search_request(
     name: &str,
     country: &str,
@@ -190,7 +243,10 @@ pub fn search_request(
 ) -> ApiRequest {
     let mut params = BTreeMap::from([
         ("hidebroken".to_string(), "true".to_string()),
-        ("limit".to_string(), limit.clamp(1, 100).to_string()),
+        (
+            "limit".to_string(),
+            limit.clamp(1, MAX_STATION_RESULTS).to_string(),
+        ),
         ("order".to_string(), "clicktrend".to_string()),
         ("reverse".to_string(), "true".to_string()),
     ]);

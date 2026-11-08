@@ -23,7 +23,21 @@ if (-not (Test-Path (Join-Path $gstBin "gstreamer-1.0-0.dll")) -or
     $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$Version/msvc/gstreamer-1.0-msvc-x86_64-$Version.exe"
 
     if (-not (Test-Path $installer)) {
-        Invoke-WebRequest -Uri $url -OutFile $installer
+        # The GStreamer mirror can be slow or drop large downloads. curl
+        # resumes partial downloads and gives up on a stalled connection
+        # instead of hanging until the job times out.
+        $partial = "$installer.part"
+        # Each attempt resumes where the last stopped, so allow plenty of them.
+        $maxAttempts = 20
+        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            & curl.exe -L --fail --silent --show-error --connect-timeout 30 `
+                --speed-limit 20000 --speed-time 60 -C - -o $partial $url
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($attempt -eq $maxAttempts) { throw "GStreamer download failed after $attempt attempts (curl exit $LASTEXITCODE)." }
+            Write-Host "GStreamer download attempt $attempt failed (curl exit $LASTEXITCODE). Retrying."
+            Start-Sleep -Seconds ([Math]::Min(5 * $attempt, 30))
+        }
+        Move-Item $partial $installer -Force
     }
 
     $actualSha256 = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()

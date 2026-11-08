@@ -112,6 +112,12 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
+      - name: Cache GStreamer
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/gstreamer
+          key: gstreamer-msvc-x86_64-1.28.3
+
       - name: Install GStreamer
         run: ./scripts/install-gstreamer-windows.ps1 -InstallDir "$env:RUNNER_TEMP\gstreamer"
 
@@ -120,6 +126,22 @@ jobs:
           cargo build --release --features gui
           New-Item -ItemType Directory -Force dist/windows | Out-Null
           Copy-Item target/release/station-scout.exe dist/windows/StationScout.exe
+          python scripts/bundle_gstreamer_windows.py --gst-root "$env:RUNNER_TEMP\gstreamer" --dest dist/windows
+
+      - name: Smoke test bundled GStreamer
+        run: |
+          # Run without the build machine's GStreamer on PATH, like a user's PC.
+          $gstBin = Join-Path $env:RUNNER_TEMP "gstreamer\bin"
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -and ($_.TrimEnd('\') -ne $gstBin.TrimEnd('\')) }) -join ';'
+          Remove-Item Env:GSTREAMER_1_0_ROOT_MSVC_X86_64, Env:GSTREAMER_ROOT_X86_64, Env:PKG_CONFIG_PATH -ErrorAction SilentlyContinue
+          $env:GST_REGISTRY = Join-Path $env:RUNNER_TEMP "smoke-registry.bin"
+          & dist/windows/StationScout.exe --check-gstreamer
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundled GStreamer check failed with exit code $LASTEXITCODE (0xC0000135 = missing DLL)."
+          }
+
+      - name: Package
+        run: |
           "[version]`nvalue=${{ needs.prepare.outputs.version }}" | Set-Content dist/version.txt
           Compress-Archive -Path dist/windows/* -DestinationPath "dist/StationScout_Portable_${{ needs.prepare.outputs.version }}.zip" -Force
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer/station-scout.iss

@@ -28,6 +28,7 @@ defaults:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
   prepare:
@@ -92,25 +93,21 @@ jobs:
       run:
         shell: pwsh
     steps:
+      # Build jobs only need the source; prepare and release fetch history.
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
-          fetch-depth: 0
 
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: cargo-windows-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-windows-
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install Inno Setup
-        run: choco install innosetup -y --no-progress
+        run: |
+          # Some runner images already ship Inno Setup 6; skip the slow choco install then.
+          if (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") {
+            Write-Host "Inno Setup is already installed."
+          } else {
+            choco install innosetup -y --no-progress
+          }
 
       - name: Cache GStreamer
         uses: actions/cache@v5
@@ -160,22 +157,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # Build jobs only need the source; prepare and release fetch history.
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
-          fetch-depth: 0
 
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: cargo-linux-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-linux-
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install system dependencies
         run: |

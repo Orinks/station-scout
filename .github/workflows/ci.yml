@@ -1,15 +1,24 @@
 name: CI
 
+# Docs-only changes (Markdown, docs/, LICENSE) skip CI. CHANGELOG.md is
+# Markdown too, but the CHANGELOG gate only matters when code changes.
 on:
   push:
     branches: [main, dev]
+    paths-ignore: ["**/*.md", "docs/**", "LICENSE*"]
   pull_request:
     branches: [main, dev]
+    paths-ignore: ["**/*.md", "docs/**", "LICENSE*"]
   workflow_dispatch:
 
+# One run per branch or PR. A new push to a PR cancels the older run;
+# pushes to dev and main always finish so their caches get saved.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 defaults:
   run:
@@ -17,62 +26,30 @@ defaults:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # No debug info in CI builds: faster compiles and links, much smaller caches.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
 
 jobs:
-  validate:
-    name: Validate (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
+  # Fast checks that need no Rust build. They finish in seconds, so a
+  # formatting slip or a missing CHANGELOG entry shows up right away.
+  lint:
+    name: Format and CHANGELOG
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
-      - name: Install GStreamer (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
-
-      - name: Cache GStreamer (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.temp }}/gstreamer
-          key: gstreamer-msvc-x86_64-1.28.3
-
-      - name: Install GStreamer (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/install-gstreamer-windows.ps1 -InstallDir "$env:RUNNER_TEMP\gstreamer"
-
       - name: Format
-        if: runner.os == 'Linux'
         run: cargo fmt --check
 
       - name: Check CHANGELOG entry
-        if: runner.os == 'Linux'
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE="origin/${{ github.base_ref }}"
-            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}:${BASE}" || true
             echo "PR detected - checking changelog entries against $BASE"
           elif [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
             BASE="${{ github.event.before }}"
@@ -93,19 +70,61 @@ jobs:
             exit 1
           fi
 
+  test-linux:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install GStreamer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+
+      # Caches dependencies only (not our own crate), keyed on the toolchain
+      # and Cargo.lock. PRs reuse the dev/main cache but don't write their
+      # own, so they don't push the good caches out of the 10 GB limit.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
+
       - name: Test
-        run: cargo test
+        run: cargo test --locked
+
+  windows:
+    name: Test and bundle check (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache GStreamer
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/gstreamer
+          key: gstreamer-msvc-x86_64-1.28.3
+
+      - name: Install GStreamer
+        shell: pwsh
+        run: ./scripts/install-gstreamer-windows.ps1 -InstallDir "$env:RUNNER_TEMP\gstreamer"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Test
+        run: cargo test --locked
 
       - name: Check wxDragon desktop build with GStreamer playback
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: cargo check --bin station-scout --features gui
+        run: cargo check --locked --bin station-scout --features gui
 
       - name: Check bundled GStreamer runs without a system install
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo build --bin station-scout
+          # cargo test already built this binary, so this is a quick no-op build.
+          cargo build --locked --bin station-scout
           $dest = Join-Path $env:RUNNER_TEMP "bundle-check"
           New-Item -ItemType Directory -Force $dest | Out-Null
           Copy-Item target/debug/station-scout.exe (Join-Path $dest "StationScout.exe")

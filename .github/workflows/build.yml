@@ -134,7 +134,7 @@ jobs:
           cargo build --release --features gui
           New-Item -ItemType Directory -Force dist/windows | Out-Null
           Copy-Item target/release/station-scout.exe dist/windows/StationScout.exe
-          ./scripts/bundle-gstreamer-windows.ps1 -GstRoot "$env:RUNNER_TEMP\gstreamer" -Dest dist/windows
+          python scripts/bundle_gstreamer_windows.py --gst-root "$env:RUNNER_TEMP\gstreamer" --dest dist/windows
 
       - name: Smoke test bundled GStreamer
         run: |

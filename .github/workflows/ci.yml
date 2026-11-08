@@ -10,6 +10,11 @@ on:
     branches: [main, dev]
     paths-ignore: ["**/*.md", "docs/**", "LICENSE*"]
   workflow_dispatch:
+  # Weekly run on main. It keeps the main caches (GStreamer, Rust deps) from
+  # being evicted after 7 days unused, since every branch and PR can read
+  # them, and it catches breakage from new Rust or runner image releases.
+  schedule:
+    - cron: "41 6 * * 1"
 
 # One run per branch or PR. A new push to a PR cancels the older run;
 # pushes to dev and main always finish so their caches get saved.
@@ -96,9 +101,9 @@ jobs:
   windows:
     name: Test and bundle check (Windows)
     runs-on: windows-latest
-    # A cold run (GStreamer download plus an empty Rust cache) can take close
-    # to an hour; cached runs take a few minutes.
-    timeout-minutes: 60
+    # A cold run (slow GStreamer mirror plus an empty Rust cache) can take
+    # over an hour; cached runs take a few minutes.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
 
@@ -141,7 +146,7 @@ jobs:
           $dest = Join-Path $env:RUNNER_TEMP "bundle-check"
           New-Item -ItemType Directory -Force $dest | Out-Null
           Copy-Item target/debug/station-scout.exe (Join-Path $dest "StationScout.exe")
-          ./scripts/bundle-gstreamer-windows.ps1 -GstRoot "$env:RUNNER_TEMP\gstreamer" -Dest $dest
+          python scripts/bundle_gstreamer_windows.py --gst-root "$env:RUNNER_TEMP\gstreamer" --dest $dest
           # Run without the build machine's GStreamer on PATH, like a user's PC.
           $gstBin = Join-Path $env:RUNNER_TEMP "gstreamer\bin"
           $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -and ($_.TrimEnd('\') -ne $gstBin.TrimEnd('\')) }) -join ';'

@@ -78,7 +78,9 @@ pub fn configure_bundled_gstreamer() {
 /// Used by `--check-gstreamer` and the release build's smoke test.
 pub fn check_playback_support() -> Result<Vec<String>, String> {
     gstreamer::init().map_err(|error| format!("Failed to initialize GStreamer: {error}"))?;
-    let has = |name: &str| gstreamer::ElementFactory::find(name).is_some();
+    // Creating the element, not just finding its factory, catches plugins
+    // whose libraries fail to load at runtime (souphttpsrc needs libsoup).
+    let has = |name: &str| gstreamer::ElementFactory::make(name).build().is_ok();
     let mut missing: Vec<String> = REQUIRED_ELEMENTS
         .iter()
         .filter(|name| !has(name))

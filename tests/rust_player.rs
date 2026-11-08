@@ -318,3 +318,12 @@ impl RadioPlaybackBackend for VolumeRecordingBackend {
 
     fn stop(&mut self) {}
 }
+
+#[test]
+fn gstreamer_player_builds_audio_only_playbin_when_available() {
+    // Skips on machines without the playbin plugin; on others this checks
+    // that the audio-only flags string parses.
+    if let Ok(mut player) = station_scout::player::gstreamer_radio_player() {
+        player.set_volume(0.5);
+    }
+}

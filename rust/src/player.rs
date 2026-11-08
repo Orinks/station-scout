@@ -1,3 +1,4 @@
+use gstreamer::gobject::GObjectExtManualGst;
 use gstreamer::prelude::{ElementExt, ObjectExt};
 
 use crate::models::Station;
@@ -134,6 +135,9 @@ impl GStreamerUriPlaybackControl {
         let player = gstreamer::ElementFactory::make("playbin")
             .build()
             .map_err(|error| format!("Failed to create GStreamer playbin: {error}"))?;
+        // Audio only: skip video and subtitle decoding for video podcasts.
+        // The Windows build bundles audio plugins only.
+        player.set_property_from_str("flags", "audio+soft-volume");
         Ok(Self { player })
     }
 }
